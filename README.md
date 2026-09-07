@@ -8,9 +8,17 @@ Composer status pills for Paseo. Three pills sit in the agent composer track bar
 
 Tapping a pill opens its detail panel: **Claude limits** lists every reported window (5h, weekly, per-model weekly) with a refresh button; **Context** breaks down input, cached, output tokens and cost. The ship pill is the exception: when the verdict is green it sends `/ship` on the first tap instead of opening anything.
 
+## Requirements
+
+The verdict is the plugin's own work: `ship.server.ts` runs every check itself and needs nothing but `git` and whatever quality tools the repository already declares.
+
+Acting on it is not. Tapping a green pill, or **Ship now** in the panel, sends the literal text `/ship` to the agent, so that agent has to be a pi session with the [ship extension](https://github.com/frailbongat/dotfiles/tree/main/pi/agent/extensions/ship) installed at `~/.pi/agent/extensions/ship`. Anywhere else the agent receives `/ship` as an ordinary message and nothing ships.
+
+Without the extension the pill still reads correctly, and a blocked pill still opens its panel, which is a read-only report. Only the one-tap ship goes nowhere.
+
 ## Ship readiness
 
-The verdict mirrors `~/.pi/agent/extensions/ship` step for step, because a pill that disagrees with `/ship` is worse than no pill. It re-reads at the end of every agent turn, on a 60-second backstop poll for idle agents, and on demand from **Re-check ship readiness** in the Command Center.
+The verdict mirrors [the ship extension](https://github.com/frailbongat/dotfiles/tree/main/pi/agent/extensions/ship) step for step, because a pill that disagrees with `/ship` is worse than no pill. It re-reads at the end of every agent turn, on a 60-second backstop poll for idle agents, and on demand from **Re-check ship readiness** in the Command Center.
 
 Blockers, in the order `/ship` hits them: a git operation in progress, unmerged index entries, an unresolvable destination, an `origin` with no push URL, a sensitive path in the change set, and a failing quality check.
 
