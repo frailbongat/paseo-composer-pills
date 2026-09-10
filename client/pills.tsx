@@ -21,16 +21,18 @@ import {
   limitsPollIntervalMs,
   pillSettings,
 } from "../shared/settings";
+import { runShipCheck } from "./ship-actions";
 import { ShipPillIcon, shipPillLabel } from "./ship-pill";
 import {
   clearAllVerdicts,
   clearVerdict,
   isCompactClient,
   readVerdict,
+  subscribeToVerdicts,
   watchCompact,
   writeVerdict,
 } from "./ship-store";
-import { hasVerdict, isReady, readCachedShipVerdict, readShipVerdict } from "../shared/ship";
+import { hasVerdict, isReady, readCachedShipVerdict } from "../shared/ship";
 import {
   clearAllUsage,
   clearUsage,
@@ -201,11 +203,10 @@ export function contributeClient(client: PluginClientContext) {
     const cwd = cwdByAgent.get(agentId);
     if (!cwd) return;
     try {
-      // `agentId` stores the result as this agent's cached verdict, so the pill
-      // and the panel move together.
-      const verdict = await client.rpc(readShipVerdict, { cwd, force: true, agentId });
+      // Shared with the Command Center item and `/ship-check`, so all three
+      // move the pill, the panel, and the timeline row the same way.
+      await runShipCheck(client, agentId, cwd);
       if (disposed) return;
-      writeVerdict(agentId, verdict);
       syncPills(agentId);
     } catch (error) {
       console.error("[paseo-composer-pills] ship re-check failed", error);
@@ -556,12 +557,21 @@ export function contributeClient(client: PluginClientContext) {
     for (const agentId of workspaceByAgent.keys()) syncPills(agentId);
   });
 
+  // A verdict can be written by something that does not own the pills: the
+  // panel's own re-check, or `/ship-check` typed into the composer. Watching
+  // the store is what lets those move the pill without reaching into it.
+  const unwatchVerdicts = subscribeToVerdicts(() => {
+    if (disposed) return;
+    syncAllPills();
+  });
+
   return () => {
     disposed = true;
     clearInterval(poll);
     clearInterval(labelTick);
     unwatchSettings();
     unwatchCompact();
+    unwatchVerdicts();
     unsubscribe();
     for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
     workspaceByAgent.clear();

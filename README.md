@@ -55,6 +55,10 @@ No token means no limit pill. Tokens never reach the client bundle.
 
 The verdict mirrors the ship extension step for step, because a pill that disagrees with `/ship` is worse than no pill. The daemon recomputes it when a turn ends, through an `agent.turn_ended` lifecycle hook, and parks it per agent. That runs with no app connected, so the pill and the panel read a finished verdict the moment the tab opens instead of starting a check and spinning. **Re-check ship readiness** in the ship menu and in the Command Center (⌘K), and the panel's **Re-check** button, force a fresh run.
 
+`/ship-check` in the composer runs the same forced re-check without opening anything, so it can be typed mid-message. The pill and the panel move with it.
+
+When a turn ends, the daemon also appends the verdict to that agent's timeline as a row: the headline, the branch line, and every blocker and warning. The row uses one fixed plugin id per agent, so the next turn and every re-check replace it in place instead of stacking a second verdict. The first row waits until there is something to ship; after that the row keeps updating even once the tree goes clean. Rows live in the daemon's memory, so they survive scroll, refetch, and reconnect, but not a daemon restart.
+
 Blockers, in the order `/ship` hits them:
 
 1. A git operation in progress
@@ -106,17 +110,20 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 
 | File | Runtime | Role |
 | --- | --- | --- |
-| `index.client.tsx` | client | Registers the settings screen, the three panels, the Command Center items, the pill entrypoint |
+| `index.client.tsx` | client | Registers the settings screen, the three panels, the Command Center items, the `/ship-check` slash command, the timeline renderer, the pill entrypoint |
 | `index.server.ts` | server | Registers the settings document, the RPC handlers and the turn-end hook |
 | `client/settings-screen.tsx` / `client/settings-store.ts` / `shared/settings.ts` | both | Settings screen, client-side value cache, the persisted document and its defaults |
 | `client/pills.tsx` | client | Pill lifecycle, ordering, labels, agent tracking, limit polling |
 | `client/limit-pill.tsx` / `client/limit-readout.tsx` / `client/limit-panel.tsx` / `client/limits-store.ts` | client | Claude limit pill, the readout shared by its popover and panel, 1s ticker and countdown |
 | `client/context-pill.tsx` / `client/context-readout.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, the readout shared by its popover and panel, per-agent usage store |
 | `client/ship-pill.tsx` / `client/ship-panel.tsx` / `client/ship-store.ts` | client | Ship pill, panel with re-check and ship buttons, verdict store and width gate |
-| `shared/limits.ts` / `shared/ship.ts` | shared | Zod RPC contracts, versioned verdict schema and helpers |
+| `client/ship-actions.ts` | client | The forced re-check shared by the pill menu, the Command Center item and `/ship-check` |
+| `client/ship-row.tsx` | client | Timeline renderer for the daemon's blocker row |
+| `shared/limits.ts` / `shared/ship.ts` / `shared/timeline.ts` | shared | Zod RPC contracts, versioned verdict schema and helpers, the timeline row contract |
 | `server/limits.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
 | `server/ship.ts` | server | Git plumbing, quality checks, quality cache |
 | `server/ship-cache.ts` | server | Per-agent verdict cache filled at turn end, read by the pill |
+| `server/timeline.ts` | server | Appends the verdict to the agent timeline under a fixed row id |
 
 ## Develop
 
