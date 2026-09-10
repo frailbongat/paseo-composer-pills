@@ -39,7 +39,13 @@ Computing the verdict needs nothing but `git` plus whatever quality tools the re
 ls ~/.pi/agent/extensions/ship   # if this is empty, one-tap ship does nothing
 ```
 
-Without it the pill still reads correctly and the panel still reports. Only the one-tap ship goes nowhere: the agent just receives `/ship` as an ordinary message.
+Without it the pill still reads correctly and the panel still reports. Only the one-tap ship goes nowhere: the agent just receives `/ship` as an ordinary message, and since the plugin hides that message (below), it answers a question that is not on screen.
+
+### The `/ship` message is hidden
+
+Paseo submits a provider slash command as ordinary message text, so a tap on **Ship now** and a hand-typed `/ship` both leave a user row reading `/ship`. pi never treats it as conversation: the ship extension registers `ship` as a command, runs it, and the turn carries the ship's own output. A timeline transformer in `client/ship-echo.ts` drops that row, so the timeline shows what ship did instead of the keystroke that started it.
+
+It matches on the first word, so `/ship main` and `/ship verbose` go too, and it follows the **Ship command** setting. A message with a line break is prose and stays. Only the echo is removed: ship's notices and the verdict row still show.
 
 ### Claude limits need a Claude token
 
@@ -110,7 +116,7 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 
 | File | Runtime | Role |
 | --- | --- | --- |
-| `index.client.tsx` | client | Registers the settings screen, the three panels, the Command Center items, the `/ship-check` slash command, the timeline renderer, the pill entrypoint |
+| `index.client.tsx` | client | Registers the settings screen, the three panels, the Command Center items, the `/ship-check` slash command, the timeline transformer and renderer, the pill entrypoint |
 | `index.server.ts` | server | Registers the settings document, the RPC handlers and the turn-end hook |
 | `client/settings-screen.tsx` / `client/settings-store.ts` / `shared/settings.ts` | both | Settings screen, client-side value cache, the persisted document and its defaults |
 | `client/pills.tsx` | client | Pill lifecycle, ordering, labels, agent tracking, limit polling |
@@ -119,6 +125,7 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 | `client/ship-pill.tsx` / `client/ship-panel.tsx` / `client/ship-store.ts` | client | Ship pill, panel with re-check and ship buttons, verdict store and width gate |
 | `client/ship-actions.ts` | client | The forced re-check shared by the pill menu, the Command Center item and `/ship-check` |
 | `client/ship-row.tsx` | client | Timeline renderer for the daemon's blocker row |
+| `client/ship-echo.ts` | client | Timeline transformer that hides the `/ship` message the send leaves behind |
 | `shared/limits.ts` / `shared/ship.ts` / `shared/timeline.ts` | shared | Zod RPC contracts, versioned verdict schema and helpers, the timeline row contract |
 | `server/limits.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
 | `server/ship.ts` | server | Git plumbing, quality checks, quality cache |

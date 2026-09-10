@@ -6,6 +6,7 @@ import { LIMIT_PANEL_ID } from "./client/limit-pill";
 import { contributeClient } from "./client/pills";
 import { SettingsScreen } from "./client/settings-screen";
 import { runShipCheck } from "./client/ship-actions";
+import { addShipEchoTransformer } from "./client/ship-echo";
 import { ShipPanel } from "./client/ship-panel";
 import { SHIP_PANEL_ID } from "./client/ship-pill";
 import { ShipRowItem } from "./client/ship-row";
@@ -44,6 +45,10 @@ export default function contribute(client: PluginClientContext) {
   // Draws the blocker row the daemon appends when a turn ends. Registered
   // whether or not this client ever runs a check, because the row can arrive
   // from a turn that finished while this app was closed.
+  // Drops the `/ship` echo the send leaves behind. Registered next to the
+  // renderer because the two are one story: the echo goes, the verdict row
+  // stays.
+  addShipEchoTransformer(client);
   client.addTimelineRenderer({
     kind: SHIP_ROW_KIND,
     version: SHIP_ROW_VERSION,
