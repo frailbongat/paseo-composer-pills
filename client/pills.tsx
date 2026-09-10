@@ -242,7 +242,10 @@ export function contributeClient(client: PluginClientContext) {
       await client.paseo.agents.ref(agentId).send("/ship");
     } catch (error) {
       console.error("[paseo-composer-pills] /ship failed to send", error);
-      throw error;
+      // Paseo toasts a failed action's error message, so the rethrow names the
+      // action. The raw transport error alone reads as an unattributed failure.
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not send /ship: ${reason}`, { cause: error });
     } finally {
       shipInFlight.delete(agentId);
     }
