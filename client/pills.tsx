@@ -1,9 +1,15 @@
-import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
-import { CONTEXT_PANEL_ID, ContextPillIcon, contextPillLabel } from "./context-pill";
-import { LIMIT_PANEL_ID, LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
+import type {
+  PluginButtonBehavior,
+  PluginButtonRegistration,
+  PluginClientContext,
+} from "@getpaseo/plugin/client";
+import { ContextPillIcon, contextPillLabel } from "./context-pill";
+import { ContextPopover } from "./context-readout";
+import { LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
+import { LimitPopover } from "./limit-readout";
 import { clearLimits, findWindow, readLimits, writeLimits } from "./limits-store";
 import { readClaudeLimits } from "../shared/limits";
-import { SHIP_PANEL_ID, ShipPillIcon, shipPillLabel } from "./ship-pill";
+import { ShipPillIcon, shipPillLabel } from "./ship-pill";
 import {
   clearAllVerdicts,
   clearVerdict,
@@ -12,7 +18,7 @@ import {
   watchCompact,
   writeVerdict,
 } from "./ship-store";
-import { hasVerdict, isReady, readCachedShipVerdict } from "../shared/ship";
+import { hasVerdict, isReady, readCachedShipVerdict, readShipVerdict } from "../shared/ship";
 import {
   clearAllUsage,
   clearUsage,
@@ -48,7 +54,11 @@ export function contributeClient(client: PluginClientContext) {
   const visibleByAgent = new Map<string, Map<PillKind, boolean>>();
   const workspaceByAgent = new Map<string, string>();
   const cwdByAgent = new Map<string, string>();
+  /** Last status seen on the update stream, which is the only place it lives. */
+  const statusByAgent = new Map<string, string>();
   const claudeAgents = new Set<string>();
+  /** Last readiness published into a ship menu, so it is only rebuilt on a change. */
+  const shipReadyByAgent = new Map<string, boolean>();
   const shipInFlight = new Set<string>();
   /** Agents with a cached-verdict read already on the wire. */
   const verdictReads = new Set<string>();
@@ -79,12 +89,10 @@ export function contributeClient(client: PluginClientContext) {
           icon: ContextPillIcon,
           ...(label === null ? {} : { label }),
           visible,
-          behavior: {
-            kind: "action",
-            onPress() {
-              client.openPanel(CONTEXT_PANEL_ID, { workspaceId, agentId });
-            },
-          },
+          // The readout is the whole point of the tap, so it opens in place: a
+          // sheet on a phone, an anchored popover on a wide window. The panel
+          // stays registered for anyone who wants it as a tab.
+          behavior: { kind: "popover", Content: ContextPopover },
         },
       });
     }
@@ -99,15 +107,7 @@ export function contributeClient(client: PluginClientContext) {
           icon: ShipPillIcon,
           ...(label === null ? {} : { label }),
           visible,
-          behavior: {
-            kind: "action",
-            // Deliberately not async. Paseo greys the pill to 50% and mounts a
-            // spinner for as long as `onPress` stays pending, so returning
-            // before the send resolves is the only way to keep the pill still.
-            onPress() {
-              void pressShip(workspaceId, agentId);
-            },
-          },
+          behavior: shipMenu(agentId),
         },
       });
     }
@@ -121,15 +121,81 @@ export function contributeClient(client: PluginClientContext) {
         icon: LimitPillIcon,
         ...(label === null ? {} : { label }),
         visible,
-        behavior: {
-          kind: "action",
-          async onPress() {
-            client.openPanel(LIMIT_PANEL_ID, { workspaceId, agentId });
-            await refreshLimits(true);
-          },
-        },
+        // The readout refreshes itself on open and writes into the shared
+        // store, so opening it is also what the old forced refresh bought.
+        behavior: { kind: "popover", Content: LimitPopover },
       },
     });
+  }
+
+  /**
+   * Ship is a menu rather than a popover because every entry is an action, and
+   * the first one is the ship itself: one tap opens the menu, the next ships.
+   * `disabled` is the readiness gate, so a blocked branch can still be
+   * re-checked without ever offering a ship `/ship` would refuse. Paseo draws
+   * the menu, so a separator is the only spacing this can ask for, and two
+   * items around one separator is the whole menu.
+   */
+  function shipMenu(agentId: string): PluginButtonBehavior {
+    const verdict = readVerdict(agentId);
+    const ready = hasVerdict(verdict) && isReady(verdict);
+    shipReadyByAgent.set(agentId, ready);
+
+    return {
+      kind: "menu",
+      items: [
+        {
+          kind: "item",
+          id: "ship-now",
+          title: "Ship now",
+          icon: "Ship",
+          disabled: !ready,
+          behavior: { kind: "action", onPress: () => pressShip(agentId) },
+        },
+        { kind: "separator", id: "ship-gap" },
+        {
+          kind: "item",
+          id: "ship-recheck",
+          title: "Re-check ship readiness",
+          icon: "RefreshCw",
+          behavior: { kind: "action", onPress: () => recheckShip(agentId) },
+        },
+      ],
+    };
+  }
+
+  /**
+   * Republishes the ship menu when readiness flips, because a menu item's
+   * `disabled` is a value on the descriptor rather than something a component
+   * re-reads. Behavior updates must carry the complete new behavior.
+   */
+  function syncShipMenu(agentId: string): void {
+    const pill = pillsByAgent.get(agentId)?.get("ship");
+    if (!pill) return;
+
+    const verdict = readVerdict(agentId);
+    const ready = hasVerdict(verdict) && isReady(verdict);
+    if (ready === shipReadyByAgent.get(agentId)) return;
+    pill.update({ behavior: shipMenu(agentId) });
+  }
+
+  /** The forced re-check, which is the only thing that pays for a fresh run. */
+  async function recheckShip(agentId: string): Promise<void> {
+    const cwd = cwdByAgent.get(agentId);
+    if (!cwd) return;
+    try {
+      // `agentId` stores the result as this agent's cached verdict, so the pill
+      // and the panel move together.
+      const verdict = await client.rpc(readShipVerdict, { cwd, force: true, agentId });
+      if (disposed) return;
+      writeVerdict(agentId, verdict);
+      syncPills(agentId);
+    } catch (error) {
+      console.error("[paseo-composer-pills] ship re-check failed", error);
+      // Rethrown so Paseo reports the failure instead of the menu closing on a
+      // verdict that never changed.
+      throw error;
+    }
   }
 
   /** Pushes changed pill text into registrations already on screen. */
@@ -152,22 +218,22 @@ export function contributeClient(client: PluginClientContext) {
   }
 
   /**
-   * Ready is a one-tap ship, because that is the whole point of the pill: the
-   * verdict already says `/ship` would succeed, so making the user open a panel
-   * to press a second button is the click this exists to remove. Blocked opens
-   * the panel instead, since the reasons are what matter then.
+   * The send itself, and nothing else: the tap ships or it says why. `Ship now`
+   * is already disabled unless the verdict is ready, so the checks here cover
+   * the rest: a double-tap while the first send is still on the wire, and an
+   * agent that started running since the menu was built.
    */
-  async function pressShip(workspaceId: string, agentId: string): Promise<void> {
-    // A second tap while the first is still sending is a double-tap, not a
-    // request for the panel, so it does nothing. The guard is set before the
-    // first await, so the second tap always sees it.
+  async function pressShip(agentId: string): Promise<void> {
+    // A second tap while the first is still sending is a double-tap, so it does
+    // nothing. The guard is set before the first await, so the second tap
+    // always sees it.
     if (shipInFlight.has(agentId)) return;
 
     const verdict = readVerdict(agentId);
-    if (!verdict || !isReady(verdict) || !isIdle(agentId)) {
-      client.openPanel(SHIP_PANEL_ID, { workspaceId, agentId });
-      return;
-    }
+    if (!verdict || !isReady(verdict)) throw new Error("This branch is not ready to ship.");
+    // Thrown rather than swallowed, so Paseo reports the refusal. A tap that
+    // silently does nothing reads as a broken menu.
+    if (!isIdle(agentId)) throw new Error("The agent is busy. Ship once the turn ends.");
 
     shipInFlight.add(agentId);
     try {
@@ -176,7 +242,7 @@ export function contributeClient(client: PluginClientContext) {
       await client.paseo.agents.ref(agentId).send("/ship");
     } catch (error) {
       console.error("[paseo-composer-pills] /ship failed to send", error);
-      client.openPanel(SHIP_PANEL_ID, { workspaceId, agentId });
+      throw error;
     } finally {
       shipInFlight.delete(agentId);
     }
@@ -210,6 +276,7 @@ export function contributeClient(client: PluginClientContext) {
     pillsByAgent.delete(agentId);
     labelsByAgent.delete(agentId);
     visibleByAgent.delete(agentId);
+    shipReadyByAgent.delete(agentId);
   }
 
   /**
@@ -264,6 +331,7 @@ export function contributeClient(client: PluginClientContext) {
     }
     visibleByAgent.set(agentId, shown);
 
+    syncShipMenu(agentId);
     syncLabels(agentId);
   }
 
@@ -317,13 +385,15 @@ export function contributeClient(client: PluginClientContext) {
     }
   }
 
-  /** Live status, read at the moment it is needed rather than remembered. */
+  /**
+   * Status as of the last update, because there is nowhere cheaper to read it.
+   * `agents.ref()` mints a fresh handle whose `current()` is `null` until that
+   * handle itself has refreshed or subscribed, so asking a throwaway ref
+   * answers `null` every time and never `"idle"`. `observe` sees the same
+   * stream the pill labels come from, so this is as live as the pill is.
+   */
   function isIdle(agentId: string): boolean {
-    try {
-      return readString(client.paseo.agents.ref(agentId).current(), "status") === "idle";
-    } catch {
-      return false;
-    }
+    return statusByAgent.get(agentId) === "idle";
   }
 
   function observe(agentSnapshot: unknown): void {
@@ -337,11 +407,15 @@ export function contributeClient(client: PluginClientContext) {
     const knownCwd = cwdByAgent.get(agentId);
     if (cwd && cwd !== knownCwd) cwdByAgent.set(agentId, cwd);
 
+    // A partial update may omit status, which must not blank a known one.
+    const status = readString(agentSnapshot, "status");
+    if (status) statusByAgent.set(agentId, status);
+
     // Picking the daemon's answer up is a map lookup there, so this asks on the
     // first sight of an agent and again whenever a settled one reports in. A
     // running agent is skipped because its verdict cannot have moved yet.
     const firstLook = cwd !== null && cwd !== knownCwd;
-    if (firstLook || readString(agentSnapshot, "status") === "idle") {
+    if (firstLook || status === "idle") {
       void readShip(agentId, readString(agentSnapshot, "lastActivityAt") ?? undefined);
     }
 
@@ -363,6 +437,7 @@ export function contributeClient(client: PluginClientContext) {
     clearVerdict(agentId);
     workspaceByAgent.delete(agentId);
     cwdByAgent.delete(agentId);
+    statusByAgent.delete(agentId);
     verdictReads.delete(agentId);
     claudeAgents.delete(agentId);
     removeAgentPills(agentId);
@@ -428,6 +503,7 @@ export function contributeClient(client: PluginClientContext) {
     for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
     workspaceByAgent.clear();
     cwdByAgent.clear();
+    statusByAgent.clear();
     verdictReads.clear();
     claudeAgents.clear();
     shipInFlight.clear();

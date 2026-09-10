@@ -4,9 +4,19 @@ Three status pills in the Paseo agent composer track bar, left to right.
 
 | Pill | Reads | Tap |
 | --- | --- | --- |
-| `⏱ 92% left · 3h 05m` | Claude headroom in the rolling 5h window, countdown ticks every second. Hidden for non-Claude models. | Opens **Claude limits**: every reported window (5h, weekly, per-model weekly) plus refresh. |
-| `◔ 12k (6%)` | Context window usage from the agent's last turn. | Opens **Context**: input, cached, output tokens and cost. |
-| `⛵ Ship` / `⛵ 2 blockers` | Whether `/ship` would succeed here right now. | Green sends `/ship` on the first tap. Blocked opens the read-only report. |
+| `⏱ 92% left · 3h 05m` | Claude headroom in the rolling 5h window, countdown ticks every second. Hidden for non-Claude models. | Opens the limits readout in place: every reported window (5h, weekly, per-model weekly). |
+| `◔ 12k (6%)` | Context window usage from the agent's last turn. | Opens the context readout in place: input, cached, output tokens and cost. |
+| `⛵ Ship` / `⛵ 2 blockers` | Whether `/ship` would succeed here right now. | Opens a menu: **Ship now**, **Re-check ship readiness**. |
+
+The two readouts open where they are: a bottom sheet on a narrow window, an anchored popover on a
+wide one. Nothing opens a new workspace tab. The same three panels stay registered, so **Claude
+limits**, **Context**, and **Ship check** are still there for anyone who wants a tab. No pill opens
+one; the Command Center's **Re-check ship readiness** is what does.
+
+**Ship now** is the first item, so a ready branch ships in one tap after the menu opens. It is
+disabled whenever the verdict is not ready, and the send still refuses a second tap while the first
+is on the wire or an agent that started running since the menu was built. A refused or failed send
+reports the reason instead of sending anything.
 
 ## Install
 
@@ -43,7 +53,7 @@ No token means no limit pill. Tokens never reach the client bundle.
 
 ## Ship readiness
 
-The verdict mirrors the ship extension step for step, because a pill that disagrees with `/ship` is worse than no pill. The daemon recomputes it when a turn ends, through an `agent.turn_ended` lifecycle hook, and parks it per agent. That runs with no app connected, so the pill and the panel read a finished verdict the moment the tab opens instead of starting a check and spinning. **Re-check ship readiness** in the Command Center (⌘K) and the panel's **Re-check** button force a fresh run.
+The verdict mirrors the ship extension step for step, because a pill that disagrees with `/ship` is worse than no pill. The daemon recomputes it when a turn ends, through an `agent.turn_ended` lifecycle hook, and parks it per agent. That runs with no app connected, so the pill and the panel read a finished verdict the moment the tab opens instead of starting a check and spinning. **Re-check ship readiness** in the ship menu and in the Command Center (⌘K), and the panel's **Re-check** button, force a fresh run.
 
 Blockers, in the order `/ship` hits them:
 
@@ -64,7 +74,8 @@ Undecidable checks, such as a linter running past 30s, count as blockers, never 
 
 The Anthropic usage endpoint returns `429` under load and stays angry for minutes. The server layer is built around that:
 
-- One network call every 15 minutes at most, across all agents, pills, and windows.
+- One network call every 15 minutes at most, across all agents, pills, and windows. Nothing in the UI forces past it: opening the readout asks the daemon, which usually answers from that snapshot.
+
 - On failure, backoff from 5 to 60 minutes with jitter while still serving the last good numbers with an `error` attached.
 - Last good snapshot cached at `~/.cache/paseo-composer-pills/usage.json`, so a reload shows numbers instead of firing a fetch.
 - Snapshots are dropped once their 5h window passes.
@@ -79,15 +90,15 @@ The row does not wrap or scroll, and Paseo's own diff pill shows up whenever the
 
 Paseo renders composer pills in registration order with no ordering API, and a plugin can only remove its own pills. Hence one plugin, not two: `PILL_ORDER` in `client/pills.tsx` re-fixes the order on every change.
 
-Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo draws the text, so each pill file exports an icon component for the live colour and a label function the entrypoint pushes with `update`.
+Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo draws the text, so each pill file exports an icon component for the live colour and a label function the entrypoint pushes with `update`. A menu item's `disabled` is a value on that descriptor rather than something a component re-reads, so `syncShipMenu` republishes the whole ship menu when readiness flips.
 
 | File | Runtime | Role |
 | --- | --- | --- |
 | `index.client.tsx` | client | Registers the three panels, the Command Center item, the pill entrypoint |
 | `index.server.ts` | server | Registers the RPC handlers and the turn-end hook |
 | `client/pills.tsx` | client | Pill lifecycle, ordering, labels, agent tracking, limit polling |
-| `client/limit-pill.tsx` / `client/limit-panel.tsx` / `client/limits-store.ts` | client | Claude limit pill, panel, 1s ticker and countdown |
-| `client/context-pill.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, panel, per-agent usage store |
+| `client/limit-pill.tsx` / `client/limit-readout.tsx` / `client/limit-panel.tsx` / `client/limits-store.ts` | client | Claude limit pill, the readout shared by its popover and panel, 1s ticker and countdown |
+| `client/context-pill.tsx` / `client/context-readout.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, the readout shared by its popover and panel, per-agent usage store |
 | `client/ship-pill.tsx` / `client/ship-panel.tsx` / `client/ship-store.ts` | client | Ship pill, panel with re-check and ship buttons, verdict store and width gate |
 | `shared/limits.ts` / `shared/ship.ts` | shared | Zod RPC contracts, versioned verdict schema and helpers |
 | `server/limits.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
