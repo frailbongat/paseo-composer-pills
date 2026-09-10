@@ -24,7 +24,11 @@ export default function contribute(server: PluginServerContext) {
   // timeline row.
   server.handle(readShipVerdict, async (input, context) => {
     const verdict = await readShipVerdictRpc(input);
-    if (input.agentId) await publishShipRow(context.paseo, input.agentId, verdict);
+    // Never `fresh`: a re-check corrects the card the current turn published
+    // instead of dropping a second one below it.
+    if (input.agentId) {
+      await publishShipRow(context.paseo, input.agentId, verdict, { fresh: false });
+    }
     return verdict;
   });
   server.handle(readCachedShipVerdict, (input) => readCachedShipVerdictRpc(input));
@@ -40,9 +44,14 @@ export default function contribute(server: PluginServerContext) {
       // state, so a turn that changed nothing reuses the previous run.
       const verdict = await refreshAgentVerdict(id, cwd);
       if (verdict.isRepo) console.log(`[ship] ${id}: ${verdictLine(verdict)}`);
-      // The row lands under the turn that just finished and replaces the one
-      // the previous turn left, so the timeline carries one current verdict.
-      await publishShipRow(context.paseo, id, verdict);
+      // The card lands under the turn that just finished, and every card an
+      // earlier turn left goes read-only, so at most one card offers a ship.
+      // `event.timeline` is where those older cards are found: this process may
+      // never have appended them.
+      await publishShipRow(context.paseo, id, verdict, {
+        fresh: true,
+        timeline: event.timeline,
+      });
     } catch (error) {
       console.error("[paseo-composer-pills] turn-end ship verdict failed", error);
     }

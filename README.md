@@ -15,8 +15,12 @@ Command Center's **Re-check ship readiness** is what does.
 Ship readiness is not a pill. Its verdict is a list of blockers rather than a number, so it is a
 card the daemon keeps in the timeline, and the ship itself is a button on that card, next to the
 reasons it is offered. The button appears only for a ready branch and only while the agent is idle.
-Pressing it spins the button, refuses a second press, and stays spinning until the ship's turn ends.
-A failed send reports the reason on the card instead of sending anything.
+
+Pressing it sends the command and puts the button down: no spinner, no second press, and no label
+that changes. The turn it starts is an ordinary turn, and Paseo's stream footer already reports a
+running turn, so the card would only be saying the same thing twice. The button comes back when
+that turn ends, or after five seconds if the command never started one. A failed send reports the
+reason on the card instead of sending anything.
 
 The same card is what the **Ship check** panel draws, so the button is in both places and behaves
 the same way. The panel adds **Re-check**, which is the only thing that pays for a fresh run.
@@ -66,7 +70,13 @@ The verdict mirrors the ship extension step for step, because a card that disagr
 
 `/ship-check` in the composer runs the same forced re-check without opening anything, so it can be typed mid-message. The card and the panel move with it.
 
-When a turn ends, the daemon appends the verdict to that agent's timeline as a card: the headline, the branch line, every blocker and warning, and the ship button when the branch is ready. The row uses one fixed plugin id per agent, so the next turn and every re-check replace it in place instead of stacking a second verdict. That is what makes the button safe to put there: there is one card per agent and it always carries the current verdict. The first card waits until there is something to ship; after that it keeps updating even once the tree goes clean. Rows live in the daemon's memory, so they survive scroll, refetch, and reconnect, but not a daemon restart.
+When a turn ends, the daemon appends the verdict to that agent's timeline as a card: the headline, the branch line, every blocker and warning, and the ship button when the branch is ready.
+
+Each such turn gets its own card, so the card is always in the turn you are reading. That is a deliberate cost. Paseo replaces a re-appended row where it already sits rather than moving it down, so reusing one id per agent parks the card at the turn it first appeared in and updates it there, out of sight.
+
+Every turn end retires the cards before it: each one is re-appended as stale, keeping its verdict and its button as that turn's history while going grey, with the button disabled and the footer reading `no longer current`. At most one card can ship, which is the point, because the tree the older ones described has moved on. The cards to retire are read out of the turn-end event's own timeline snapshot, not out of anything the plugin remembers, so a card left by an earlier load of the plugin is retired too instead of keeping a live button forever.
+
+A turn that ends with a clean tree retires the same way and publishes nothing, so a quiet turn stays quiet. A re-check is different: `/ship-check`, the Command Center item, and the panel's **Re-check** all reuse the current turn's id, so they correct the card on screen, blockers cleared and all, instead of stacking another. The first card waits until there is something to ship. Cards live in the daemon's memory, so they survive scroll, refetch, and reconnect, but not a daemon restart.
 
 Blockers, in the order `/ship` hits them:
 
@@ -116,7 +126,9 @@ The pill entrypoint registers pills outside React, where no hook can run, so it 
 
 Paseo renders composer pills in registration order with no ordering API, and a plugin can only remove its own pills. Hence one plugin, not two: `PILL_ORDER` in `client/pills.tsx` re-fixes the order on every change.
 
-Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo draws the text, so each pill file exports an icon component for the live colour and a label function the entrypoint pushes with `update`. Paseo also owns a pill's busy state, which is one reason the ship left: a button the plugin draws can spin on its own without anything else on the agent reacting.
+Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo draws the text, so each pill file exports an icon component for the live colour and a label function the entrypoint pushes with `update`.
+
+`client/action-button.tsx` carries a `busy` state and only **Re-check** uses it. A spinner is for work nothing else on screen reports; the ship's work is a turn, and Paseo spins for that already.
 
 | File | Runtime | Role |
 | --- | --- | --- |
@@ -136,7 +148,7 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 | `server/limits.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
 | `server/ship.ts` | server | Git plumbing, quality checks, quality cache |
 | `server/ship-cache.ts` | server | Per-agent verdict cache filled at turn end, read by the panel |
-| `server/timeline.ts` | server | Appends the verdict to the agent timeline under a fixed row id |
+| `server/timeline.ts` | server | Mints a card id per turn, retires the previous card, appends the verdict |
 
 ## Develop
 

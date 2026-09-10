@@ -5,10 +5,21 @@
  * the two can never disagree about what a verdict looks like. The card also
  * carries the ship itself. That trigger used to be a composer pill, which put
  * the button at the bottom of the window and the reasons it was disabled
- * somewhere else entirely, and handed the pending state to Paseo's own button
- * chrome. Here the verdict and its one action are the same object, and the
- * button reports its own progress: it spins, it refuses a second press, and
- * nothing else on the agent spins on its behalf.
+ * somewhere else entirely. Here the verdict and its one action are the same
+ * object.
+ *
+ * A card whose turn has passed keeps its button and greys it out. The slot
+ * stays filled, so the row reads the same everywhere and the difference between
+ * history and the live card is a state rather than a different layout. It
+ * cannot be pressed: the verdict is still true for that turn, but the tree it
+ * described has moved on, so shipping from it would ship something the reader
+ * never checked.
+ *
+ * The button draws no progress of its own. The command it sends starts an
+ * ordinary turn, and Paseo already reports a running turn in the stream footer,
+ * so a second spinner on the card would only be the same news twice. The button
+ * goes inert instead: pressed once, disabled until that turn ends, back when
+ * there is something to press it for again.
  */
 
 import type { PluginTheme } from "@getpaseo/plugin";
@@ -21,15 +32,19 @@ import { usePillSettings } from "./settings-store";
 import type { ShipCheck } from "../shared/ship";
 import type { ShipRow } from "../shared/timeline";
 
-/** How long a sent command has to start a turn before the button stops waiting. */
+/** How long a sent command has to start a turn before the button comes back. */
 const HANDOFF_GRACE_MS = 5_000;
 
-type ShipPhase = "idle" | "sending" | "shipping";
-
 function statusColor(row: ShipRow, theme: PluginTheme): string {
+  // History recedes: one card in the stream carries colour, and it is the one
+  // that can still be acted on.
+  if (row.stale) return theme.colors.foregroundMuted;
   if (row.ready) return theme.colors.statusSuccess;
   return row.blockers.length > 0 ? theme.colors.statusDanger : theme.colors.foregroundMuted;
 }
+
+/** A disabled button never fires this, and `ActionButton` requires a handler. */
+function noop(): void {}
 
 function checkTime(checkedAt: string): string {
   return new Date(checkedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -78,18 +93,19 @@ function ShipButton({
   const paseo = usePaseo();
   const command = usePillSettings().shipCommand;
   const status = useAgent(agentId, (agent) => agent.status);
-  const [phase, setPhase] = useState<ShipPhase>("idle");
+  const [sent, setSent] = useState(false);
   /** Whether the turn this button started has actually begun. */
   const turnBegan = useRef(false);
 
   /**
-   * The turn the send starts is the ship, so the spinner runs until that turn
-   * ends rather than until the send is acknowledged. `turnBegan` is what
-   * separates the two moments that both read as "not running": the gap before
-   * the agent picks the command up, and the end of the work itself.
+   * A sent command is not a running turn yet, and the agent status cannot tell
+   * those two apart: the gap before the agent picks the command up and the end
+   * of the work itself both read as "not running". `turnBegan` is what
+   * separates them, and it is why the button stays down across the handover
+   * rather than flickering back for a beat.
    */
   useEffect(() => {
-    if (phase !== "shipping") {
+    if (!sent) {
       turnBegan.current = false;
       return;
     }
@@ -98,23 +114,23 @@ function ShipButton({
       return;
     }
     if (turnBegan.current) {
-      setPhase("idle");
+      setSent(false);
       return;
     }
     // A command that never produced a turn, which is what an agent that quietly
-    // dropped it looks like. Hand the button back instead of spinning forever.
-    const timer = setTimeout(() => setPhase("idle"), HANDOFF_GRACE_MS);
+    // dropped it looks like. Hand the button back instead of holding it down.
+    const timer = setTimeout(() => setSent(false), HANDOFF_GRACE_MS);
     return () => clearTimeout(timer);
-  }, [phase, status]);
+  }, [sent, status]);
 
-  const busy = phase !== "idle";
   // `null` is an agent this client has no snapshot for, which is not a reason
   // to refuse the press; the send reports its own failure.
   const agentBusy = status !== null && status !== "idle";
 
   const ship = useCallback(() => {
-    if (phase !== "idle") return;
-    setPhase("sending");
+    if (sent) return;
+    // Set before the first await, so a second press in the same frame sees it.
+    setSent(true);
     onError(null);
 
     void (async () => {
@@ -122,28 +138,26 @@ function ShipButton({
         // Paseo submits a provider slash command as ordinary message text, so
         // this is exactly what typing the command into the composer does.
         await paseo.agents.ref(agentId).send(command);
-        setPhase("shipping");
       } catch (error) {
         console.error("[paseo-composer-pills] ship command failed to send", error);
         const reason = error instanceof Error ? error.message : String(error);
-        setPhase("idle");
+        setSent(false);
         onError(`Could not send ${command}: ${reason}`);
       }
     })();
-  }, [agentId, command, onError, paseo, phase]);
+  }, [agentId, command, onError, paseo, sent]);
+
+  const down = sent || agentBusy;
 
   return (
     <ActionButton
       theme={theme}
       tone="primary"
       icon="Ship"
-      label={phase === "sending" ? "Sending…" : phase === "shipping" ? "Shipping…" : "Ship"}
+      label="Ship"
       accessibilityLabel={`Run ${command} now`}
-      {...(agentBusy && !busy
-        ? { accessibilityHint: "Available once the agent finishes its turn." }
-        : {})}
-      busy={busy}
-      disabled={agentBusy}
+      {...(down ? { accessibilityHint: "Available once the agent finishes its turn." } : {})}
+      disabled={down}
       stretch={stretch}
       onPress={ship}
     />
@@ -173,7 +187,12 @@ export function ShipCard({ row, agentId, theme, compact, footnote = null }: Ship
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.surface1,
         paddingHorizontal: padding,
-        paddingVertical: compact ? 13 : 15,
+        // The head row is as tall as the button in it, so an even top and bottom
+        // measure the same and read differently: the headline looks pushed down
+        // into the card. The top is trimmed until the headline sits where the
+        // eye puts it, level with the button's own label.
+        paddingTop: compact ? 11 : 12,
+        paddingBottom: compact ? 13 : 15,
         overflow: "hidden" as const,
       },
       head: {
@@ -186,9 +205,26 @@ export function ShipCard({ row, agentId, theme, compact, footnote = null }: Ship
         alignItems: "center" as const,
         gap: 8,
         flexShrink: 1,
-        ...(compact ? {} : { flexGrow: 1, flexBasis: 0 }),
+        // Centring two texts of different sizes lines up their boxes, not their
+        // letters, and the 16pt headline reads low beside the 13pt button label.
+        // Matching the baselines takes about a pixel; this lifts further than
+        // that, sitting the headline high in the row on purpose, which is what
+        // reads as level against a filled button. Whole pixels only, so a 1x
+        // browser client does not render the row on a half pixel.
+        ...(compact
+          ? {}
+          : { flexGrow: 1, flexBasis: 0, transform: [{ translateY: -4 }] as const }),
       },
-      headline: { fontSize: compact ? 15 : 16, fontWeight: "600" as const, flexShrink: 1 },
+      // An explicit line height is what makes the centring honest. Left to its
+      // default, a `Text` box carries leading the eye does not see, and the
+      // headline centres that invisible box against the button instead of its
+      // own letters.
+      headline: {
+        fontSize: compact ? 15 : 16,
+        lineHeight: compact ? 19 : 20,
+        fontWeight: "600" as const,
+        flexShrink: 1,
+      },
       branch: { color: theme.colors.foreground, fontSize: 13, lineHeight: 18 },
       detail: { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 16 },
       rule: {
@@ -224,12 +260,30 @@ export function ShipCard({ row, agentId, theme, compact, footnote = null }: Ship
             {row.headline}
           </Text>
         </View>
-        {row.ready ? (
+        {!row.ready ? null : row.stale ? (
+          <ActionButton
+            theme={theme}
+            tone="primary"
+            icon="Ship"
+            label="Ship"
+            accessibilityLabel="Ship"
+            accessibilityHint="This check is no longer current."
+            disabled
+            stretch={compact}
+            onPress={noop}
+          />
+        ) : (
           <ShipButton agentId={agentId} theme={theme} stretch={compact} onError={setFailure} />
-        ) : null}
+        )}
       </View>
 
-      <View style={{ marginTop: 10, gap: 2 }}>
+      {/*
+        On a wide card the head row is as tall as the button, so the headline
+        already has half that height under it. The gap closes to match what the
+        eye measures from the letters, and stays open when there is no button to
+        borrow height from.
+      */}
+      <View style={{ marginTop: !compact && row.ready ? 6 : 10, gap: 2 }}>
         <Text style={styles.branch} numberOfLines={1}>
           {row.branch}
         </Text>
@@ -256,6 +310,7 @@ export function ShipCard({ row, agentId, theme, compact, footnote = null }: Ship
           <Text style={styles.footnote} numberOfLines={1}>
             {row.passed} check{row.passed === 1 ? "" : "s"} passed
             {footnote ? ` · ${footnote}` : ""}
+            {row.stale ? " · no longer current" : ""}
           </Text>
         </View>
         <Text style={styles.footnote}>{checkTime(row.checkedAt)}</Text>

@@ -6,6 +6,11 @@
  * swaps its icon for the spinner rather than growing or moving. `busy` and
  * `disabled` are separate on purpose. Busy is work this button started and
  * keeps its colour; disabled is a button that cannot act yet and goes quiet.
+ *
+ * Reach for `busy` only when nothing else on screen reports the work. The
+ * re-check qualifies: it is an RPC nobody else can see. The ship does not, and
+ * uses `disabled` while its turn runs, because Paseo's own stream footer is
+ * already spinning for it.
  */
 
 import type { PluginTheme } from "@getpaseo/plugin";
@@ -17,7 +22,7 @@ export interface ActionButtonProps {
   theme: PluginTheme;
   /** `primary` is the one action a surface wants pressed; `quiet` is the rest. */
   tone: "primary" | "quiet";
-  /** Lucide icon name, hidden while the button is busy. */
+  /** Lucide icon name, replaced by the spinner while the button is busy. */
   icon: string;
   label: string;
   accessibilityLabel: string;
