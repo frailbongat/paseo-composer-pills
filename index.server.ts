@@ -19,9 +19,9 @@ export default function contribute(server: PluginServerContext) {
   server.registerSettings(pillSettings);
 
   server.handle(readClaudeLimits, (input) => readClaudeLimitsHandler(input));
-  // A named agent is a re-check the user asked for, from the pill menu, the
-  // panel, the Command Center, or `/ship-check`, so its result also refreshes
-  // that agent's timeline row.
+  // A named agent is a re-check the user asked for, from the panel, the Command
+  // Center, or `/ship-check`, so its result also refreshes that agent's
+  // timeline row.
   server.handle(readShipVerdict, async (input, context) => {
     const verdict = await readShipVerdictRpc(input);
     if (input.agentId) await publishShipRow(context.paseo, input.agentId, verdict);
@@ -30,8 +30,8 @@ export default function contribute(server: PluginServerContext) {
   server.handle(readCachedShipVerdict, (input) => readCachedShipVerdictRpc(input));
 
   // The end of a turn is the moment the tree stops moving, and the daemon sees
-  // it whether or not an app is connected. Computing here is what lets the pill
-  // show a finished verdict the instant the tab opens.
+  // it whether or not an app is connected. Computing here is what lets the card
+  // and the panel show a finished verdict the instant they are on screen.
   const stopWatchingTurns = server.on("agent.turn_ended", async (event, context) => {
     const { id, cwd } = event.agent;
     if (!cwd.trim()) return;

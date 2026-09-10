@@ -5,7 +5,7 @@
  * outside React, where no hook can be called. So the entrypoint reads the
  * document over the settings RPC and parks it here, and everything that needs a
  * setting reads this store instead: the pill entrypoint synchronously, the
- * panels through `usePillSettings`.
+ * ship card and the panels through `usePillSettings`.
  */
 
 import { useSyncExternalStore } from "react";
@@ -32,9 +32,7 @@ export function readSettings(): PillSettings {
 
 function same(a: PillSettings, b: PillSettings): boolean {
   return (
-    a.limitsPollSeconds === b.limitsPollSeconds &&
-    a.compactWidth === b.compactWidth &&
-    a.shipCommand === b.shipCommand
+    a.limitsPollSeconds === b.limitsPollSeconds && a.shipCommand === b.shipCommand
   );
 }
 

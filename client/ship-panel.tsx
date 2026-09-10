@@ -1,40 +1,22 @@
-import type { PluginTheme } from "@getpaseo/plugin";
-import { type PluginAgentPanelProps, useAgent, usePaseo, useRpc } from "@getpaseo/plugin/client";
-import { useCallback, useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { shipColor } from "./ship-pill";
-import { usePillSettings } from "./settings-store";
-import { readVerdict, useShipVerdict, writeVerdict } from "./ship-store";
-import {
-  type ShipCheck,
-  blockingChecks,
-  branchLine,
-  isReady,
-  passedCount,
-  readCachedShipVerdict,
-  readShipVerdict,
-  verdictLine,
-  warningChecks,
-} from "../shared/ship";
+/**
+ * The ship panel: the same card as the timeline row, plus the re-check.
+ *
+ * The panel draws no verdict of its own. It reads one, hands it to `ShipCard`,
+ * and owns the one thing the card deliberately does not: paying for a fresh
+ * run. The ship itself lives on the card, so it is the same button here as in
+ * the timeline.
+ */
 
-function CheckRow({ check, theme }: { check: ShipCheck; theme: PluginTheme }) {
-  const color = check.status === "fail" ? theme.colors.statusDanger : theme.colors.statusWarning;
-  return (
-    <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
-      <Text style={{ color, fontSize: 13, lineHeight: 18 }}>{check.status === "fail" ? "×" : "!"}</Text>
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text style={{ color: theme.colors.foreground, fontSize: 13, lineHeight: 18 }}>
-          {check.label}
-        </Text>
-        {check.reason ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 16 }}>
-            {check.reason}
-          </Text>
-        ) : null}
-      </View>
-    </View>
-  );
-}
+import { type PluginAgentPanelProps, useAgent, useRpc } from "@getpaseo/plugin/client";
+import { useCallback, useEffect, useState } from "react";
+import { ScrollView, Text } from "react-native";
+import { ActionButton } from "./action-button";
+import { ShipCard } from "./ship-card";
+import { readVerdict, useShipVerdict, writeVerdict } from "./ship-store";
+import { readCachedShipVerdict, readShipVerdict } from "../shared/ship";
+import { toShipRow } from "../shared/timeline";
+
+export const SHIP_PANEL_ID = "ship";
 
 export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   const verdict = useShipVerdict(agentId);
@@ -43,10 +25,7 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   const lastActivityAt = useAgent(agentId, (agent) => agent.lastActivityAt);
   const readCached = useRpc(readCachedShipVerdict);
   const recheck = useRpc(readShipVerdict);
-  const paseo = usePaseo();
-  const shipCommand = usePillSettings().shipCommand;
   const [pending, setPending] = useState(false);
-  const [shipping, setShipping] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
   /**
@@ -84,8 +63,9 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
     setPending(true);
     setFailure(null);
     try {
-      // `agentId` stores the result as this agent's cached verdict, so the pill
-      // moves with the panel instead of keeping the verdict this replaced.
+      // `agentId` stores the result as this agent's cached verdict, so the
+      // timeline row moves with the panel instead of keeping the verdict this
+      // replaced.
       writeVerdict(agentId, await recheck({ cwd, force: true, agentId }));
     } catch (error) {
       setFailure(error instanceof Error ? error.message : String(error));
@@ -98,128 +78,45 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
     void load();
   }, [load]);
 
-  const ship = useCallback(async () => {
-    setShipping(true);
-    setFailure(null);
-    try {
-      await paseo.agents.ref(agentId).send(shipCommand);
-    } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
-    } finally {
-      setShipping(false);
-    }
-  }, [agentId, paseo, shipCommand]);
-
   const padding = layout.compact ? 16 : 24;
-  const blockers = verdict ? blockingChecks(verdict) : [];
-  const warnings = verdict ? warningChecks(verdict) : [];
-  const canShip = verdict !== null && isReady(verdict) && status === "idle";
+  const muted = { color: theme.colors.foregroundMuted, fontSize: 14, lineHeight: 20 };
 
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
-      contentContainerStyle={{ padding, gap: layout.compact ? 12 : 16 }}
+      contentContainerStyle={{ padding, gap: layout.compact ? 14 : 18 }}
     >
       {verdict === null ? (
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 14 }}>
-          {pending ? "Checking…" : "No verdict yet."}
-        </Text>
+        <Text style={muted}>{pending ? "Checking…" : "No verdict yet."}</Text>
       ) : !verdict.isRepo ? (
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 14 }}>
-          This workspace is not a git repository.
-        </Text>
+        <Text style={muted}>This workspace is not a git repository.</Text>
       ) : (
-        <View style={{ gap: 10 }}>
-          <Text style={{ color: shipColor(verdict, theme), fontSize: 18 }}>
-            {verdictLine(verdict)}
-          </Text>
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 13 }}>
-            {branchLine(verdict)}
-          </Text>
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 13 }}>
-            {verdict.changedFiles === 0
-              ? "Nothing to ship."
-              : `${verdict.changedFiles} changed file${verdict.changedFiles === 1 ? "" : "s"}`}
-            {verdict.destinationReason ? ` · ${verdict.destinationReason}` : ""}
-          </Text>
-
-          {blockers.length > 0 || warnings.length > 0 ? (
-            <View
-              style={{
-                gap: 10,
-                padding: 14,
-                borderRadius: 14,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                backgroundColor: theme.colors.surface1,
-              }}
-            >
-              {blockers.map((check) => (
-                <CheckRow key={check.id} check={check} theme={theme} />
-              ))}
-              {warnings.map((check) => (
-                <CheckRow key={check.id} check={check} theme={theme} />
-              ))}
-            </View>
-          ) : null}
-
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-            {passedCount(verdict)} check{passedCount(verdict) === 1 ? "" : "s"} passed
-            {verdict.qualityFromCache ? " · quality reused from cache" : ""}
-            {" · "}
-            {new Date(verdict.checkedAt).toLocaleTimeString([], {
-              hour: "numeric",
-              minute: "2-digit",
-            })}
-          </Text>
-        </View>
+        <ShipCard
+          row={toShipRow(verdict)}
+          agentId={agentId}
+          theme={theme}
+          compact={layout.compact}
+          footnote={verdict.qualityFromCache ? "quality reused from cache" : null}
+        />
       )}
 
       {failure ? (
-        <Text style={{ color: theme.colors.statusDanger, fontSize: 13 }}>{failure}</Text>
+        <Text style={{ color: theme.colors.statusDanger, fontSize: 13, lineHeight: 18 }}>
+          {failure}
+        </Text>
       ) : null}
 
-      <View style={{ flexDirection: "row", gap: 10 }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Re-check ship readiness"
-          disabled={pending}
-          onPress={() => void refresh()}
-          style={{
-            paddingHorizontal: 14,
-            paddingVertical: 8,
-            borderRadius: 10,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            opacity: pending ? 0.6 : 1,
-            backgroundColor: theme.colors.surface1,
-          }}
-        >
-          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
-            {pending ? "Checking…" : "Re-check"}
-          </Text>
-        </Pressable>
-
-        {canShip ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Run ${shipCommand} now`}
-            disabled={shipping}
-            onPress={() => void ship()}
-            style={{
-              paddingHorizontal: 14,
-              paddingVertical: 8,
-              borderRadius: 10,
-              opacity: shipping ? 0.6 : 1,
-              backgroundColor: theme.colors.accent,
-            }}
-          >
-            <Text style={{ color: theme.colors.accentForeground, fontSize: 13 }}>
-              {shipping ? "Sending…" : "Ship now"}
-            </Text>
-          </Pressable>
-        ) : null}
-      </View>
+      <ActionButton
+        theme={theme}
+        tone="quiet"
+        icon="RefreshCw"
+        label={pending ? "Checking…" : "Re-check"}
+        accessibilityLabel="Re-check ship readiness"
+        busy={pending}
+        disabled={!cwd}
+        stretch={layout.compact}
+        onPress={() => void refresh()}
+      />
     </ScrollView>
   );
 }

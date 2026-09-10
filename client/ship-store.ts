@@ -1,15 +1,14 @@
 /**
- * Client-only store for the per-agent ship verdict, plus the width gate.
+ * Client-only store for the per-agent ship verdict.
  *
- * The client entrypoint owns the RPC so one agent's verdict is fetched once and
- * read by both the pill and the panel. The width gate lives here too because
- * pill registration happens outside React, where `layout.compact` is not
- * available: only rendered components get that prop.
+ * The panel reads it, the panel's Re-check and `/ship-check` write it, and the
+ * pill entrypoint clears it when an agent goes away. The timeline card does not
+ * read it at all: the row the daemon appends already carries its own verdict,
+ * and drawing anything else there would put a button on one verdict and its
+ * blockers on another.
  */
 
 import { useSyncExternalStore } from "react";
-import { Dimensions } from "react-native";
-import { readSettings } from "./settings-store";
 import type { ShipVerdict } from "../shared/ship";
 
 const listeners = new Set<() => void>();
@@ -52,27 +51,4 @@ export function useShipVerdict(agentId: string): ShipVerdict | null {
     () => readVerdict(agentId),
     () => readVerdict(agentId),
   );
-}
-
-/**
- * The threshold is `compactWidth` in settings, defaulting to Paseo's own
- * `COMPACT_FORM_FACTOR_WIDTH` of 500. Paseo measures the composer's pane and
- * this measures the window, so a narrow pane on a wide desktop still counts as
- * wide here. That is the intended reading: the rule is about the phone. `0`
- * turns the rule off, so every window is treated as wide.
- */
-export function isCompactClient(): boolean {
-  return Dimensions.get("window").width < readSettings().compactWidth;
-}
-
-/** Calls back when the window crosses the compact threshold, not on every pixel. */
-export function watchCompact(onChange: () => void): () => void {
-  let compact = isCompactClient();
-  const subscription = Dimensions.addEventListener("change", () => {
-    const next = isCompactClient();
-    if (next === compact) return;
-    compact = next;
-    onChange();
-  });
-  return () => subscription.remove();
 }

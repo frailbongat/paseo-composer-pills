@@ -1,11 +1,10 @@
 /**
  * The forced re-check, in one place.
  *
- * The pill menu, the Command Center item, and the `/ship-check` slash command
- * are three ways to ask the same question, so they share the call and the write
- * into the verdict store. Whoever asks, the pill, the panel, and the timeline
- * row all move together: the store wakes the client, and the daemon re-appends
- * the row under the same id.
+ * The Command Center item and the `/ship-check` slash command are two ways to
+ * ask the same question, so they share the call and the write into the verdict
+ * store. Whoever asks, the panel and the timeline card move together: the store
+ * wakes the panel, and the daemon re-appends the row under the same id.
  */
 
 import type { PluginCommandCapabilities } from "@getpaseo/plugin/client";
@@ -23,7 +22,7 @@ export async function runShipCheck(
   cwd: string,
 ): Promise<ShipVerdict> {
   // `force` skips the quality cache and `agentId` stores the answer as this
-  // agent's cached verdict, so the next panel or pill read sees this run.
+  // agent's cached verdict, so the next panel read sees this run.
   const verdict = await caps.rpc(readShipVerdict, { cwd, force: true, agentId });
   writeVerdict(agentId, verdict);
   return verdict;

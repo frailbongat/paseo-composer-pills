@@ -7,8 +7,10 @@
  * | Setting             | Replaced constant                              |
  * | ------------------- | ---------------------------------------------- |
  * | `limitsPollSeconds` | `LIMITS_POLL_INTERVAL_MS = 60_000` (pills.tsx) |
- * | `compactWidth`      | `COMPACT_WIDTH = 500` (ship-store.ts)          |
- * | `shipCommand`       | the literal `"/ship"` (pills.tsx, ship-panel)  |
+ * | `shipCommand`       | the literal `"/ship"` (ship-card.tsx)          |
+ *
+ * `compactWidth` was here too. It only ever decided which pill kept its slot on
+ * a phone, and the ship pill it arbitrated is gone.
  */
 
 import { defineSettings } from "@getpaseo/plugin";
@@ -16,9 +18,7 @@ import { z } from "zod";
 
 /** The Claude limits poll, which was `LIMITS_POLL_INTERVAL_MS / 1_000`. */
 export const DEFAULT_LIMITS_POLL_SECONDS = 60;
-/** The window width below which the composer row is treated as a phone. */
-export const DEFAULT_COMPACT_WIDTH = 500;
-/** What the ship pill and the ship panel send into the composer. */
+/** What the ship card's button sends into the composer. */
 export const DEFAULT_SHIP_COMMAND = "/ship";
 
 /**
@@ -29,7 +29,6 @@ export const DEFAULT_SHIP_COMMAND = "/ship";
 export const LABEL_TICK_INTERVAL_MS = 1_000;
 
 export const LIMITS_POLL_SECONDS_OPTIONS = [15, 30, 60, 120, 300] as const;
-export const COMPACT_WIDTH_OPTIONS = [0, 400, 500, 600, 768] as const;
 
 export const pillSettings = defineSettings({
   id: "pills",
@@ -42,7 +41,6 @@ export const pillSettings = defineSettings({
       .min(5)
       .max(3_600)
       .default(DEFAULT_LIMITS_POLL_SECONDS),
-    compactWidth: z.number().int().min(0).max(4_000).default(DEFAULT_COMPACT_WIDTH),
     shipCommand: z.string().trim().min(1).max(200).default(DEFAULT_SHIP_COMMAND),
   }),
 });
@@ -61,9 +59,4 @@ export function pollSecondsLabel(seconds: number): string {
   if (seconds < 60) return `${seconds} seconds`;
   const minutes = seconds / 60;
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
-}
-
-/** `0` disables the phone rule outright, which is why it reads as a word. */
-export function compactWidthLabel(width: number): string {
-  return width === 0 ? "Never" : `${width} px`;
 }

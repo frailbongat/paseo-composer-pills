@@ -1,8 +1,9 @@
 /**
  * Hides the `/ship` echo from the agent timeline.
  *
- * Paseo submits a provider slash command as ordinary message text, so `Ship
- * now` and a hand-typed `/ship` both leave a user row reading `/ship`. pi never
+ * Paseo submits a provider slash command as ordinary message text, so the ship
+ * card's button and a hand-typed `/ship` both leave a user row reading `/ship`.
+ * pi never
  * treats that text as conversation: the ship extension registers `ship` as a
  * command, so pi runs it and the turn carries the ship's own output. The row is
  * an echo of the keystroke and nothing else, which is why removing it removes

@@ -19,11 +19,9 @@ import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import { writeSettings } from "./settings-store";
 import {
-  COMPACT_WIDTH_OPTIONS,
   DEFAULT_SHIP_COMMAND,
   LIMITS_POLL_SECONDS_OPTIONS,
   type PillSettings,
-  compactWidthLabel,
   pillSettings,
   pollSecondsLabel,
 } from "../shared/settings";
@@ -31,11 +29,6 @@ import {
 const POLL_OPTIONS = LIMITS_POLL_SECONDS_OPTIONS.map((seconds) => ({
   label: pollSecondsLabel(seconds),
   value: String(seconds),
-}));
-
-const WIDTH_OPTIONS = COMPACT_WIDTH_OPTIONS.map((width) => ({
-  label: compactWidthLabel(width),
-  value: String(width),
 }));
 
 export function SettingsScreen({ theme }: PluginSurfaceProps) {
@@ -104,24 +97,11 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
         </SettingsCard>
       </SettingsSection>
 
-      <SettingsSection title="Layout">
-        <SettingsCard>
-          <SettingsSelect
-            label="Treat as a phone below"
-            hint="Under this window width the ship pill only appears when it is a one-tap ship, and it takes the context pill's slot."
-            value={String(settings.values.compactWidth)}
-            options={WIDTH_OPTIONS}
-            disabled={settings.saving}
-            onValueChange={(value) => void apply({ compactWidth: Number(value) })}
-          />
-        </SettingsCard>
-      </SettingsSection>
-
       <SettingsSection title="Ship">
         <SettingsCard>
           <SettingsInput
             label="Ship command"
-            hint="Sent to the agent as ordinary message text when you press Ship now."
+            hint="Sent to the agent as ordinary message text when you press Ship on the timeline card."
             placeholder={DEFAULT_SHIP_COMMAND}
             initialValue={settings.values.shipCommand}
             error={commandError}

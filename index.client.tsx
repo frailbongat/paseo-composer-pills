@@ -7,8 +7,7 @@ import { contributeClient } from "./client/pills";
 import { SettingsScreen } from "./client/settings-screen";
 import { runShipCheck } from "./client/ship-actions";
 import { addShipEchoTransformer } from "./client/ship-echo";
-import { ShipPanel } from "./client/ship-panel";
-import { SHIP_PANEL_ID } from "./client/ship-pill";
+import { SHIP_PANEL_ID, ShipPanel } from "./client/ship-panel";
 import { ShipRowItem } from "./client/ship-row";
 import { SHIP_ROW_KIND, SHIP_ROW_VERSION, ShipRowSchema } from "./shared/timeline";
 
@@ -42,9 +41,10 @@ export default function contribute(client: PluginClientContext) {
     context: "agent",
     Component: ShipPanel,
   });
-  // Draws the blocker row the daemon appends when a turn ends. Registered
-  // whether or not this client ever runs a check, because the row can arrive
-  // from a turn that finished while this app was closed.
+  // Draws the verdict card the daemon appends when a turn ends, which is also
+  // where the ship button lives. Registered whether or not this client ever
+  // runs a check, because the row can arrive from a turn that finished while
+  // this app was closed.
   // Drops the `/ship` echo the send leaves behind. Registered next to the
   // renderer because the two are one story: the echo goes, the verdict row
   // stays.

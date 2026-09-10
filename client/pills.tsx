@@ -1,9 +1,5 @@
 import { settingsRpc } from "@getpaseo/plugin";
-import type {
-  PluginButtonBehavior,
-  PluginButtonRegistration,
-  PluginClientContext,
-} from "@getpaseo/plugin/client";
+import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
 import { ContextPillIcon, contextPillLabel } from "./context-pill";
 import { ContextPopover } from "./context-readout";
 import { LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
@@ -16,23 +12,8 @@ import {
   subscribeToSettings,
   writeSettings,
 } from "./settings-store";
-import {
-  LABEL_TICK_INTERVAL_MS,
-  limitsPollIntervalMs,
-  pillSettings,
-} from "../shared/settings";
-import { runShipCheck } from "./ship-actions";
-import { ShipPillIcon, shipPillLabel } from "./ship-pill";
-import {
-  clearAllVerdicts,
-  clearVerdict,
-  isCompactClient,
-  readVerdict,
-  subscribeToVerdicts,
-  watchCompact,
-  writeVerdict,
-} from "./ship-store";
-import { hasVerdict, isReady, readCachedShipVerdict } from "../shared/ship";
+import { LABEL_TICK_INTERVAL_MS, limitsPollIntervalMs, pillSettings } from "../shared/settings";
+import { clearAllVerdicts, clearVerdict } from "./ship-store";
 import {
   clearAllUsage,
   clearUsage,
@@ -56,37 +37,32 @@ const PRIME_LIMIT = 24;
  */
 const settingsIo = settingsRpc(pillSettings.id);
 
-type PillKind = "claude-limit" | "context" | "ship";
+type PillKind = "claude-limit" | "context";
 
 /**
  * Paseo renders composer pills in registration order and offers no ordering
- * API, so this entrypoint registers all three pills once per agent in this
- * fixed order and only ever toggles `visible`. Hiding preserves the
- * registration, so a pill that comes back lands in its original slot instead of
- * at the end of the row.
+ * API, so this entrypoint registers both pills once per agent in this fixed
+ * order and only ever toggles `visible`. Hiding preserves the registration, so
+ * a pill that comes back lands in its original slot instead of at the end of
+ * the row.
+ *
+ * Ship is not in this list. Its verdict is a paragraph of blockers rather than
+ * a number, and its action belongs next to those blockers, so both live on the
+ * timeline ship card instead.
  */
-const PILL_ORDER: readonly PillKind[] = ["claude-limit", "context", "ship"];
+const PILL_ORDER: readonly PillKind[] = ["claude-limit", "context"];
 
 export function contributeClient(client: PluginClientContext) {
   const pillsByAgent = new Map<string, Map<PillKind, PluginButtonRegistration>>();
   const labelsByAgent = new Map<string, Map<PillKind, string>>();
   const visibleByAgent = new Map<string, Map<PillKind, boolean>>();
   const workspaceByAgent = new Map<string, string>();
-  const cwdByAgent = new Map<string, string>();
-  /** Last status seen on the update stream, which is the only place it lives. */
-  const statusByAgent = new Map<string, string>();
   const claudeAgents = new Set<string>();
-  /** Last readiness published into a ship menu, so it is only rebuilt on a change. */
-  const shipReadyByAgent = new Map<string, boolean>();
-  const shipInFlight = new Set<string>();
-  /** Agents with a cached-verdict read already on the wire. */
-  const verdictReads = new Set<string>();
   let disposed = false;
 
   /** Current pill text, or null when the store has nothing to show yet. */
   function pillLabel(kind: PillKind, agentId: string): string | null {
     if (kind === "context") return contextPillLabel(agentId);
-    if (kind === "ship") return shipPillLabel(agentId);
     return limitPillLabel(Date.now());
   }
 
@@ -116,21 +92,6 @@ export function contributeClient(client: PluginClientContext) {
       });
     }
 
-    if (kind === "ship") {
-      return client.addComposerPill({
-        id: "ship",
-        workspaceId,
-        agentId,
-        button: {
-          title: "Ship readiness",
-          icon: ShipPillIcon,
-          ...(label === null ? {} : { label }),
-          visible,
-          behavior: shipMenu(agentId),
-        },
-      });
-    }
-
     return client.addComposerPill({
       id: "claude-limit",
       workspaceId,
@@ -145,75 +106,6 @@ export function contributeClient(client: PluginClientContext) {
         behavior: { kind: "popover", Content: LimitPopover },
       },
     });
-  }
-
-  /**
-   * Ship is a menu rather than a popover because every entry is an action, and
-   * the first one is the ship itself: one tap opens the menu, the next ships.
-   * `disabled` is the readiness gate, so a blocked branch can still be
-   * re-checked without ever offering a ship `/ship` would refuse. Paseo draws
-   * the menu, so a separator is the only spacing this can ask for, and two
-   * items around one separator is the whole menu.
-   */
-  function shipMenu(agentId: string): PluginButtonBehavior {
-    const verdict = readVerdict(agentId);
-    const ready = hasVerdict(verdict) && isReady(verdict);
-    shipReadyByAgent.set(agentId, ready);
-
-    return {
-      kind: "menu",
-      items: [
-        {
-          kind: "item",
-          id: "ship-now",
-          title: "Ship now",
-          icon: "Ship",
-          disabled: !ready,
-          behavior: { kind: "action", onPress: () => pressShip(agentId) },
-        },
-        { kind: "separator", id: "ship-gap" },
-        {
-          kind: "item",
-          id: "ship-recheck",
-          title: "Re-check ship readiness",
-          icon: "RefreshCw",
-          behavior: { kind: "action", onPress: () => recheckShip(agentId) },
-        },
-      ],
-    };
-  }
-
-  /**
-   * Republishes the ship menu when readiness flips, because a menu item's
-   * `disabled` is a value on the descriptor rather than something a component
-   * re-reads. Behavior updates must carry the complete new behavior.
-   */
-  function syncShipMenu(agentId: string): void {
-    const pill = pillsByAgent.get(agentId)?.get("ship");
-    if (!pill) return;
-
-    const verdict = readVerdict(agentId);
-    const ready = hasVerdict(verdict) && isReady(verdict);
-    if (ready === shipReadyByAgent.get(agentId)) return;
-    pill.update({ behavior: shipMenu(agentId) });
-  }
-
-  /** The forced re-check, which is the only thing that pays for a fresh run. */
-  async function recheckShip(agentId: string): Promise<void> {
-    const cwd = cwdByAgent.get(agentId);
-    if (!cwd) return;
-    try {
-      // Shared with the Command Center item and `/ship-check`, so all three
-      // move the pill, the panel, and the timeline row the same way.
-      await runShipCheck(client, agentId, cwd);
-      if (disposed) return;
-      syncPills(agentId);
-    } catch (error) {
-      console.error("[paseo-composer-pills] ship re-check failed", error);
-      // Rethrown so Paseo reports the failure instead of the menu closing on a
-      // verdict that never changed.
-      throw error;
-    }
   }
 
   /** Pushes changed pill text into registrations already on screen. */
@@ -235,61 +127,12 @@ export function contributeClient(client: PluginClientContext) {
     for (const agentId of pillsByAgent.keys()) syncLabels(agentId);
   }
 
-  /**
-   * The send itself, and nothing else: the tap ships or it says why. `Ship now`
-   * is already disabled unless the verdict is ready, so the checks here cover
-   * the rest: a double-tap while the first send is still on the wire, and an
-   * agent that started running since the menu was built.
-   */
-  async function pressShip(agentId: string): Promise<void> {
-    // A second tap while the first is still sending is a double-tap, so it does
-    // nothing. The guard is set before the first await, so the second tap
-    // always sees it.
-    if (shipInFlight.has(agentId)) return;
-
-    const verdict = readVerdict(agentId);
-    if (!verdict || !isReady(verdict)) throw new Error("This branch is not ready to ship.");
-    // Thrown rather than swallowed, so Paseo reports the refusal. A tap that
-    // silently does nothing reads as a broken menu.
-    if (!isIdle(agentId)) throw new Error("The agent is busy. Ship once the turn ends.");
-
-    shipInFlight.add(agentId);
-    try {
-      // Paseo submits a provider slash command as ordinary message text, so
-      // this is exactly what typing the command into the composer does.
-      const command = readSettings().shipCommand;
-      await client.paseo.agents.ref(agentId).send(command);
-    } catch (error) {
-      console.error("[paseo-composer-pills] ship command failed to send", error);
-      // Paseo toasts a failed action's error message, so the rethrow names the
-      // action. The raw transport error alone reads as an unattributed failure.
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Could not send ${readSettings().shipCommand}: ${reason}`, { cause: error });
-    } finally {
-      shipInFlight.delete(agentId);
-    }
-  }
-
-  /**
-   * On a phone the composer row already carries the two custom pills and
-   * Paseo's own diff pill, and a fourth squeezes every label into an ellipsis,
-   * so the ship pill only appears there when it is a green one-tap ship, and it
-   * takes the context pill's slot while it does. A wide window shows both.
-   */
+  /** A pill with nothing to say is hidden rather than shown empty. */
   function desiredPills(agentId: string): PillKind[] {
-    const compact = isCompactClient();
-    const verdict = readVerdict(agentId);
-    const ready = hasVerdict(verdict) && isReady(verdict);
-    const hasShip = compact ? ready : hasVerdict(verdict);
-
     const hasLimit = findWindow(readLimits()) !== null && claudeAgents.has(agentId);
-    const hasUsage = readUsage(agentId) !== null && !(compact && hasShip);
+    const hasUsage = readUsage(agentId) !== null;
 
-    return PILL_ORDER.filter((kind) => {
-      if (kind === "claude-limit") return hasLimit;
-      if (kind === "context") return hasUsage;
-      return hasShip;
-    });
+    return PILL_ORDER.filter((kind) => (kind === "claude-limit" ? hasLimit : hasUsage));
   }
 
   function removeAgentPills(agentId: string): void {
@@ -298,7 +141,6 @@ export function contributeClient(client: PluginClientContext) {
     pillsByAgent.delete(agentId);
     labelsByAgent.delete(agentId);
     visibleByAgent.delete(agentId);
-    shipReadyByAgent.delete(agentId);
   }
 
   /**
@@ -353,7 +195,6 @@ export function contributeClient(client: PluginClientContext) {
     }
     visibleByAgent.set(agentId, shown);
 
-    syncShipMenu(agentId);
     syncLabels(agentId);
   }
 
@@ -373,73 +214,12 @@ export function contributeClient(client: PluginClientContext) {
     }
   }
 
-  /**
-   * Reads the verdict the daemon already computed. Nothing here decides when a
-   * verdict is due: the daemon recomputes on every turn end, with or without an
-   * app connected, so this only has to pick the answer up.
-   */
-  async function readShip(agentId: string, notBefore?: string): Promise<void> {
-    const cwd = cwdByAgent.get(agentId);
-    if (!cwd || disposed || verdictReads.has(agentId)) return;
-
-    verdictReads.add(agentId);
-    try {
-      // `notBefore` is this agent's last activity, so a verdict from before the
-      // turn that just ended is refused rather than shown.
-      const verdict = await client.rpc(readCachedShipVerdict, {
-        agentId,
-        cwd,
-        ...(notBefore === null || notBefore === undefined ? {} : { notBefore }),
-      });
-      if (disposed) return;
-      // An unchanged verdict is the common answer, and writing it would wake
-      // every subscribed pill and panel for nothing.
-      if (readVerdict(agentId)?.checkedAt === verdict.checkedAt) return;
-      writeVerdict(agentId, verdict);
-      if (verdict.error !== null) {
-        console.error(`[paseo-composer-pills] ship verdict: ${verdict.error}`);
-      }
-      syncPills(agentId);
-    } catch (error) {
-      console.error("[paseo-composer-pills] failed to read ship verdict", error);
-    } finally {
-      verdictReads.delete(agentId);
-    }
-  }
-
-  /**
-   * Status as of the last update, because there is nowhere cheaper to read it.
-   * `agents.ref()` mints a fresh handle whose `current()` is `null` until that
-   * handle itself has refreshed or subscribed, so asking a throwaway ref
-   * answers `null` every time and never `"idle"`. `observe` sees the same
-   * stream the pill labels come from, so this is as live as the pill is.
-   */
-  function isIdle(agentId: string): boolean {
-    return statusByAgent.get(agentId) === "idle";
-  }
-
   function observe(agentSnapshot: unknown): void {
     const agentId = readString(agentSnapshot, "id");
     if (!agentId) return;
 
     const workspaceId = readString(agentSnapshot, "workspaceId");
     if (workspaceId) workspaceByAgent.set(agentId, workspaceId);
-
-    const cwd = readString(agentSnapshot, "cwd");
-    const knownCwd = cwdByAgent.get(agentId);
-    if (cwd && cwd !== knownCwd) cwdByAgent.set(agentId, cwd);
-
-    // A partial update may omit status, which must not blank a known one.
-    const status = readString(agentSnapshot, "status");
-    if (status) statusByAgent.set(agentId, status);
-
-    // Picking the daemon's answer up is a map lookup there, so this asks on the
-    // first sight of an agent and again whenever a settled one reports in. A
-    // running agent is skipped because its verdict cannot have moved yet.
-    const firstLook = cwd !== null && cwd !== knownCwd;
-    if (firstLook || status === "idle") {
-      void readShip(agentId, readString(agentSnapshot, "lastActivityAt") ?? undefined);
-    }
 
     if (isClaudeAgent(readString(agentSnapshot, "provider"), readString(agentSnapshot, "model"))) {
       claudeAgents.add(agentId);
@@ -456,11 +236,10 @@ export function contributeClient(client: PluginClientContext) {
 
   function forget(agentId: string): void {
     clearUsage(agentId);
+    // The verdict store outlives the pills: the panel and `/ship-check` write
+    // into it. An agent that is gone still has to leave it.
     clearVerdict(agentId);
     workspaceByAgent.delete(agentId);
-    cwdByAgent.delete(agentId);
-    statusByAgent.delete(agentId);
-    verdictReads.delete(agentId);
     claudeAgents.delete(agentId);
     removeAgentPills(agentId);
   }
@@ -523,7 +302,7 @@ export function contributeClient(client: PluginClientContext) {
     }
   }
 
-  // Settings first, so the compact gate is right by the time pills mount.
+  // Settings first, so the poll runs on the saved beat from the start.
   void loadSettings();
   void refreshLimits(false);
 
@@ -549,20 +328,6 @@ export function contributeClient(client: PluginClientContext) {
   const unwatchSettings = subscribeToSettings(() => {
     if (disposed) return;
     if (limitsPollIntervalMs(readSettings()) !== pollIntervalMs) reschedulePoll();
-    // A new compact width can add or drop a pill on this very window.
-    syncAllPills();
-  });
-
-  const unwatchCompact = watchCompact(() => {
-    for (const agentId of workspaceByAgent.keys()) syncPills(agentId);
-  });
-
-  // A verdict can be written by something that does not own the pills: the
-  // panel's own re-check, or `/ship-check` typed into the composer. Watching
-  // the store is what lets those move the pill without reaching into it.
-  const unwatchVerdicts = subscribeToVerdicts(() => {
-    if (disposed) return;
-    syncAllPills();
   });
 
   return () => {
@@ -570,16 +335,10 @@ export function contributeClient(client: PluginClientContext) {
     clearInterval(poll);
     clearInterval(labelTick);
     unwatchSettings();
-    unwatchCompact();
-    unwatchVerdicts();
     unsubscribe();
     for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
     workspaceByAgent.clear();
-    cwdByAgent.clear();
-    statusByAgent.clear();
-    verdictReads.clear();
     claudeAgents.clear();
-    shipInFlight.clear();
     clearAllUsage();
     clearAllVerdicts();
     clearLimits();
