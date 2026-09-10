@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { FIVE_HOUR_ID, type LimitWindow, type LimitsSnapshot } from "./limits.shared";
+import { FIVE_HOUR_ID, type LimitWindow, type LimitsSnapshot } from "../shared/limits";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA = "oauth-2025-04-20";
@@ -201,6 +201,10 @@ async function fetchSnapshot(): Promise<LimitsSnapshot> {
   let error = "Claude usage endpoint returned no data.";
 
   for (const credential of credentials) {
+    // An explicit controller rather than `AbortSignal.timeout`, which the
+    // plugin's React Native lib types do not declare.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(USAGE_URL, {
         headers: {
@@ -208,7 +212,7 @@ async function fetchSnapshot(): Promise<LimitsSnapshot> {
           "anthropic-beta": OAUTH_BETA,
           "user-agent": USER_AGENT,
         },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -234,6 +238,8 @@ async function fetchSnapshot(): Promise<LimitsSnapshot> {
       };
     } catch (caught) {
       error = toMessage(caught);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

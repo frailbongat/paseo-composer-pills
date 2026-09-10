@@ -9,7 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 import { Dimensions } from "react-native";
-import type { ShipVerdict } from "./ship.shared";
+import type { ShipVerdict } from "../shared/ship";
 
 const listeners = new Set<() => void>();
 const verdicts = new Map<string, ShipVerdict>();

@@ -1,9 +1,9 @@
-import type { PluginClientContext } from "@getpaseo/plugin";
-import { CONTEXT_PANEL_ID, ContextPill } from "./context-pill.client";
-import { LIMIT_PANEL_ID, LimitPill, isClaudeAgent } from "./limit-pill.client";
-import { clearLimits, findWindow, readLimits, writeLimits } from "./limits-store.client";
-import { readClaudeLimits } from "./limits.shared";
-import { SHIP_PANEL_ID, ShipPill } from "./ship-pill.client";
+import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
+import { CONTEXT_PANEL_ID, ContextPillIcon, contextPillLabel } from "./context-pill";
+import { LIMIT_PANEL_ID, LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
+import { clearLimits, findWindow, readLimits, writeLimits } from "./limits-store";
+import { readClaudeLimits } from "../shared/limits";
+import { SHIP_PANEL_ID, ShipPillIcon, shipPillLabel } from "./ship-pill";
 import {
   clearAllVerdicts,
   clearVerdict,
@@ -11,8 +11,8 @@ import {
   readVerdict,
   watchCompact,
   writeVerdict,
-} from "./ship-store.client";
-import { hasVerdict, isReady, readShipVerdict } from "./ship.shared";
+} from "./ship-store";
+import { hasVerdict, isReady, readShipVerdict } from "../shared/ship";
 import {
   clearAllUsage,
   clearUsage,
@@ -20,7 +20,7 @@ import {
   readUsage,
   toContextUsage,
   writeUsage,
-} from "./usage-store.client";
+} from "./usage-store";
 
 /** Agents given a one-off refresh when the plugin starts. */
 const PRIME_LIMIT = 24;
@@ -30,6 +30,11 @@ const LIMITS_POLL_INTERVAL_MS = 60_000;
  * forces a re-read, so this is a backstop for edits made outside the agent.
  */
 const SHIP_POLL_INTERVAL_MS = 60_000;
+/**
+ * Pill text is a plain string on the registration since 0.8, so the live reset
+ * countdown is pushed with `update` on this beat instead of re-rendering.
+ */
+const LABEL_TICK_INTERVAL_MS = 1_000;
 
 type PillKind = "claude-limit" | "context" | "ship";
 
@@ -41,7 +46,8 @@ type PillKind = "claude-limit" | "context" | "ship";
 const PILL_ORDER: readonly PillKind[] = ["claude-limit", "context", "ship"];
 
 export function contributeClient(client: PluginClientContext) {
-  const removalsByAgent = new Map<string, Map<PillKind, () => void>>();
+  const pillsByAgent = new Map<string, Map<PillKind, PluginButtonRegistration>>();
+  const labelsByAgent = new Map<string, Map<PillKind, string>>();
   const mountedByAgent = new Map<string, string>();
   const workspaceByAgent = new Map<string, string>();
   const cwdByAgent = new Map<string, string>();
@@ -50,16 +56,35 @@ export function contributeClient(client: PluginClientContext) {
   const shipInFlight = new Set<string>();
   let disposed = false;
 
-  function addPill(kind: PillKind, workspaceId: string, agentId: string): () => void {
+  /** Current pill text, or null when the store has nothing to show yet. */
+  function pillLabel(kind: PillKind, agentId: string): string | null {
+    if (kind === "context") return contextPillLabel(agentId);
+    if (kind === "ship") return shipPillLabel(agentId);
+    return limitPillLabel(Date.now());
+  }
+
+  function addPill(
+    kind: PillKind,
+    workspaceId: string,
+    agentId: string,
+  ): PluginButtonRegistration {
+    const label = pillLabel(kind, agentId);
+
     if (kind === "context") {
       return client.addComposerPill({
         id: "context",
-        title: "Context window usage",
         workspaceId,
         agentId,
-        Component: ContextPill,
-        onPress() {
-          client.openPanel(CONTEXT_PANEL_ID, { workspaceId, agentId });
+        button: {
+          title: "Context window usage",
+          icon: ContextPillIcon,
+          ...(label === null ? {} : { label }),
+          behavior: {
+            kind: "action",
+            onPress() {
+              client.openPanel(CONTEXT_PANEL_ID, { workspaceId, agentId });
+            },
+          },
         },
       });
     }
@@ -67,30 +92,61 @@ export function contributeClient(client: PluginClientContext) {
     if (kind === "ship") {
       return client.addComposerPill({
         id: "ship",
-        title: "Ship readiness",
         workspaceId,
         agentId,
-        Component: ShipPill,
-        // Deliberately not async. Paseo greys the pill to 50% and mounts a
-        // spinner for as long as `onPress` stays pending, so returning before
-        // the send resolves is the only way to keep the pill still.
-        onPress() {
-          void pressShip(workspaceId, agentId);
+        button: {
+          title: "Ship readiness",
+          icon: ShipPillIcon,
+          ...(label === null ? {} : { label }),
+          behavior: {
+            kind: "action",
+            // Deliberately not async. Paseo greys the pill to 50% and mounts a
+            // spinner for as long as `onPress` stays pending, so returning
+            // before the send resolves is the only way to keep the pill still.
+            onPress() {
+              void pressShip(workspaceId, agentId);
+            },
+          },
         },
       });
     }
 
     return client.addComposerPill({
       id: "claude-limit",
-      title: "Claude usage limit",
       workspaceId,
       agentId,
-      Component: LimitPill,
-      async onPress() {
-        client.openPanel(LIMIT_PANEL_ID, { workspaceId, agentId });
-        await refreshLimits(true);
+      button: {
+        title: "Claude usage limit",
+        icon: LimitPillIcon,
+        ...(label === null ? {} : { label }),
+        behavior: {
+          kind: "action",
+          async onPress() {
+            client.openPanel(LIMIT_PANEL_ID, { workspaceId, agentId });
+            await refreshLimits(true);
+          },
+        },
       },
     });
+  }
+
+  /** Pushes changed pill text into registrations already on screen. */
+  function syncLabels(agentId: string): void {
+    const pills = pillsByAgent.get(agentId);
+    if (!pills) return;
+    const known = labelsByAgent.get(agentId) ?? new Map<PillKind, string>();
+
+    for (const [kind, pill] of pills) {
+      const label = pillLabel(kind, agentId);
+      if (label === null || label === known.get(kind)) continue;
+      known.set(kind, label);
+      pill.update({ label });
+    }
+    labelsByAgent.set(agentId, known);
+  }
+
+  function syncAllLabels(): void {
+    for (const agentId of pillsByAgent.keys()) syncLabels(agentId);
   }
 
   /**
@@ -148,9 +204,10 @@ export function contributeClient(client: PluginClientContext) {
   }
 
   function unmount(agentId: string): void {
-    const removals = removalsByAgent.get(agentId);
-    if (removals) for (const remove of removals.values()) remove();
-    removalsByAgent.delete(agentId);
+    const pills = pillsByAgent.get(agentId);
+    if (pills) for (const pill of pills.values()) pill.remove();
+    pillsByAgent.delete(agentId);
+    labelsByAgent.delete(agentId);
     mountedByAgent.delete(agentId);
   }
 
@@ -159,21 +216,28 @@ export function contributeClient(client: PluginClientContext) {
     const workspaceId = workspaceByAgent.get(agentId);
     const desired = workspaceId ? desiredPills(agentId) : [];
     const signature = desired.join(",");
-    if (signature === (mountedByAgent.get(agentId) ?? "")) return;
+    if (signature === (mountedByAgent.get(agentId) ?? "")) {
+      syncLabels(agentId);
+      return;
+    }
 
     // Order is registration order, so re-add the whole set on any change.
     unmount(agentId);
     if (!workspaceId || desired.length === 0) return;
 
-    const removals = new Map<PillKind, () => void>();
+    const pills = new Map<PillKind, PluginButtonRegistration>();
+    const labels = new Map<PillKind, string>();
     for (const kind of desired) {
       try {
-        removals.set(kind, addPill(kind, workspaceId, agentId));
+        pills.set(kind, addPill(kind, workspaceId, agentId));
+        const label = pillLabel(kind, agentId);
+        if (label !== null) labels.set(kind, label);
       } catch (error) {
         console.error(`[paseo-composer-pills] failed to add ${kind} pill`, error);
       }
     }
-    removalsByAgent.set(agentId, removals);
+    pillsByAgent.set(agentId, pills);
+    labelsByAgent.set(agentId, labels);
     mountedByAgent.set(agentId, signature);
   }
 
@@ -307,6 +371,8 @@ export function contributeClient(client: PluginClientContext) {
     }
   }, SHIP_POLL_INTERVAL_MS);
 
+  const labelTick = setInterval(syncAllLabels, LABEL_TICK_INTERVAL_MS);
+
   const unwatchCompact = watchCompact(() => {
     for (const agentId of workspaceByAgent.keys()) syncPills(agentId);
   });
@@ -315,9 +381,10 @@ export function contributeClient(client: PluginClientContext) {
     disposed = true;
     clearInterval(poll);
     clearInterval(shipPoll);
+    clearInterval(labelTick);
     unwatchCompact();
     unsubscribe();
-    for (const agentId of [...removalsByAgent.keys()]) unmount(agentId);
+    for (const agentId of [...pillsByAgent.keys()]) unmount(agentId);
     workspaceByAgent.clear();
     cwdByAgent.clear();
     statusByAgent.clear();

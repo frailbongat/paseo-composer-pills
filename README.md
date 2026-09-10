@@ -33,7 +33,7 @@ Without it the pill still reads correctly and the panel still reports. Only the 
 
 ### Claude limits need a Claude token
 
-`limits.server.ts` runs on the daemon and reads the first working OAuth token from:
+`server/limits.ts` runs on the daemon and reads the first working OAuth token from:
 
 1. `$CLI_PROXY_API_AUTH_DIR` or `~/.cli-proxy-api/*.json` (entries with `type: "claude"`)
 2. `~/.claude/.credentials.json`
@@ -77,18 +77,21 @@ The row does not wrap or scroll, and Paseo's own diff pill shows up whenever the
 
 ## Files
 
-Paseo renders composer pills in registration order with no ordering API, and a plugin can only remove its own pills. Hence one plugin, not two: `PILL_ORDER` in `pills.client.tsx` re-fixes the order on every change.
+Paseo renders composer pills in registration order with no ordering API, and a plugin can only remove its own pills. Hence one plugin, not two: `PILL_ORDER` in `client/pills.tsx` re-fixes the order on every change.
+
+Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo draws the text, so each pill file exports an icon component for the live colour and a label function the entrypoint pushes with `update`.
 
 | File | Runtime | Role |
 | --- | --- | --- |
-| `index.ts` | shared | Registers RPC handlers, the three panels, the Command Center item, the client entrypoint |
-| `pills.client.tsx` | client | Pill lifecycle, ordering, agent tracking, limit polling |
-| `limit-pill.client.tsx` / `limit-panel.client.tsx` / `limits-store.client.ts` | client | Claude limit pill, panel, 1s ticker and countdown |
-| `context-pill.client.tsx` / `context-panel.client.tsx` / `usage-store.client.ts` | client | Context pill, panel, per-agent usage store |
-| `ship-pill.client.tsx` / `ship-panel.client.tsx` / `ship-store.client.ts` | client | Ship pill, panel with re-check and ship buttons, verdict store and width gate |
-| `limits.shared.ts` / `ship.shared.ts` | shared | Zod RPC contracts, versioned verdict schema and helpers |
-| `limits.server.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
-| `ship.server.ts` | server | Git plumbing, quality checks, quality cache |
+| `index.client.tsx` | client | Registers the three panels, the Command Center item, the pill entrypoint |
+| `index.server.ts` | server | Registers the RPC handlers |
+| `client/pills.tsx` | client | Pill lifecycle, ordering, labels, agent tracking, limit polling |
+| `client/limit-pill.tsx` / `client/limit-panel.tsx` / `client/limits-store.ts` | client | Claude limit pill, panel, 1s ticker and countdown |
+| `client/context-pill.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, panel, per-agent usage store |
+| `client/ship-pill.tsx` / `client/ship-panel.tsx` / `client/ship-store.ts` | client | Ship pill, panel with re-check and ship buttons, verdict store and width gate |
+| `shared/limits.ts` / `shared/ship.ts` | shared | Zod RPC contracts, versioned verdict schema and helpers |
+| `server/limits.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
+| `server/ship.ts` | server | Git plumbing, quality checks, quality cache |
 
 ## Develop
 

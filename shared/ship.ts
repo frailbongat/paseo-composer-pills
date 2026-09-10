@@ -7,7 +7,7 @@
  * any breaking change to the shape below.
  */
 
-import { defineRpc } from "@getpaseo/plugin/server";
+import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
 export const SHIP_VERDICT_KIND = "ship-verdict";

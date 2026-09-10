@@ -1,14 +1,9 @@
-import {
-  type PluginAgentPanelProps,
-  type PluginTheme,
-  useAgent,
-  usePaseo,
-  useRpc,
-} from "@getpaseo/plugin";
+import type { PluginTheme } from "@getpaseo/plugin";
+import { type PluginAgentPanelProps, useAgent, usePaseo, useRpc } from "@getpaseo/plugin/client";
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { shipColor } from "./ship-pill.client";
-import { useShipVerdict, writeVerdict } from "./ship-store.client";
+import { shipColor } from "./ship-pill";
+import { useShipVerdict, writeVerdict } from "./ship-store";
 import {
   type ShipCheck,
   blockingChecks,
@@ -18,7 +13,7 @@ import {
   readShipVerdict,
   verdictLine,
   warningChecks,
-} from "./ship.shared";
+} from "../shared/ship";
 
 function CheckRow({ check, theme }: { check: ShipCheck; theme: PluginTheme }) {
   const color = check.status === "fail" ? theme.colors.statusDanger : theme.colors.statusWarning;

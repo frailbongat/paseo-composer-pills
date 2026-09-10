@@ -6,7 +6,7 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { FIVE_HOUR_ID, type LimitWindow, type LimitsSnapshot } from "./limits.shared";
+import { FIVE_HOUR_ID, type LimitWindow, type LimitsSnapshot } from "../shared/limits";
 
 const listeners = new Set<() => void>();
 let snapshot: LimitsSnapshot | null = null;

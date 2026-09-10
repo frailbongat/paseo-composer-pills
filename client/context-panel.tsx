@@ -1,19 +1,15 @@
-import {
-  type PluginAgentPanelProps,
-  type PluginTheme,
-  useAgent,
-  usePaseo,
-} from "@getpaseo/plugin";
+import type { PluginTheme } from "@getpaseo/plugin";
+import { type PluginAgentPanelProps, useAgent, usePaseo } from "@getpaseo/plugin/client";
 import { useEffect, useMemo } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { useAgentUsage, usageColor } from "./context-pill.client";
+import { useAgentUsage, usageColor } from "./context-pill";
 import {
   formatExactTokens,
   formatTokens,
   toContextUsage,
   usageRatio,
   writeUsage,
-} from "./usage-store.client";
+} from "./usage-store";
 
 function formatCost(costUsd: number): string {
   return costUsd >= 1 ? `$${costUsd.toFixed(2)}` : `$${costUsd.toFixed(4)}`;

@@ -18,8 +18,8 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { ShipCheck, ShipVerdict } from "./ship.shared";
-import { SHIP_VERDICT_KIND, SHIP_VERDICT_VERSION } from "./ship.shared";
+import type { ShipCheck, ShipVerdict } from "../shared/ship";
+import { SHIP_VERDICT_KIND, SHIP_VERDICT_VERSION } from "../shared/ship";
 
 const GIT_TIMEOUT_MS = 15_000;
 /**

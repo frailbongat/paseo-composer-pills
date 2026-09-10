@@ -1,7 +1,8 @@
-import { type PluginAgentPanelProps, type PluginTheme, useRpc } from "@getpaseo/plugin";
+import type { PluginTheme } from "@getpaseo/plugin";
+import { type PluginAgentPanelProps, useRpc } from "@getpaseo/plugin/client";
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { limitColor } from "./limit-pill.client";
+import { limitColor } from "./limit-pill";
 import {
   formatCountdown,
   formatResetClock,
@@ -9,8 +10,8 @@ import {
   useLimits,
   useNow,
   writeLimits,
-} from "./limits-store.client";
-import { type LimitWindow, readClaudeLimits } from "./limits.shared";
+} from "./limits-store";
+import { type LimitWindow, readClaudeLimits } from "../shared/limits";
 
 const TITLES: Record<string, string> = {
   five_hour: "Session (5 hours)",
