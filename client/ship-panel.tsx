@@ -3,6 +3,7 @@ import { type PluginAgentPanelProps, useAgent, usePaseo, useRpc } from "@getpase
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { shipColor } from "./ship-pill";
+import { usePillSettings } from "./settings-store";
 import { readVerdict, useShipVerdict, writeVerdict } from "./ship-store";
 import {
   type ShipCheck,
@@ -43,6 +44,7 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   const readCached = useRpc(readCachedShipVerdict);
   const recheck = useRpc(readShipVerdict);
   const paseo = usePaseo();
+  const shipCommand = usePillSettings().shipCommand;
   const [pending, setPending] = useState(false);
   const [shipping, setShipping] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -100,13 +102,13 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
     setShipping(true);
     setFailure(null);
     try {
-      await paseo.agents.ref(agentId).send("/ship");
+      await paseo.agents.ref(agentId).send(shipCommand);
     } catch (error) {
       setFailure(error instanceof Error ? error.message : String(error));
     } finally {
       setShipping(false);
     }
-  }, [agentId, paseo]);
+  }, [agentId, paseo, shipCommand]);
 
   const padding = layout.compact ? 16 : 24;
   const blockers = verdict ? blockingChecks(verdict) : [];
@@ -201,7 +203,7 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         {canShip ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Run /ship now"
+            accessibilityLabel={`Run ${shipCommand} now`}
             disabled={shipping}
             onPress={() => void ship()}
             style={{

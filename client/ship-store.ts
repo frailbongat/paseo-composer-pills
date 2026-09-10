@@ -9,6 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 import { Dimensions } from "react-native";
+import { readSettings } from "./settings-store";
 import type { ShipVerdict } from "../shared/ship";
 
 const listeners = new Set<() => void>();
@@ -54,14 +55,14 @@ export function useShipVerdict(agentId: string): ShipVerdict | null {
 }
 
 /**
- * Paseo's own `COMPACT_FORM_FACTOR_WIDTH`. It measures the composer's pane and
+ * The threshold is `compactWidth` in settings, defaulting to Paseo's own
+ * `COMPACT_FORM_FACTOR_WIDTH` of 500. Paseo measures the composer's pane and
  * this measures the window, so a narrow pane on a wide desktop still counts as
- * wide here. That is the intended reading: the rule is about the phone.
+ * wide here. That is the intended reading: the rule is about the phone. `0`
+ * turns the rule off, so every window is treated as wide.
  */
-const COMPACT_WIDTH = 500;
-
 export function isCompactClient(): boolean {
-  return Dimensions.get("window").width < COMPACT_WIDTH;
+  return Dimensions.get("window").width < readSettings().compactWidth;
 }
 
 /** Calls back when the window crosses the compact threshold, not on every pixel. */

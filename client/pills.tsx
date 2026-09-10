@@ -1,3 +1,4 @@
+import { settingsRpc } from "@getpaseo/plugin";
 import type {
   PluginButtonBehavior,
   PluginButtonRegistration,
@@ -9,6 +10,17 @@ import { LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
 import { LimitPopover } from "./limit-readout";
 import { clearLimits, findWindow, readLimits, writeLimits } from "./limits-store";
 import { readClaudeLimits } from "../shared/limits";
+import {
+  readSettings,
+  resetSettingsCache,
+  subscribeToSettings,
+  writeSettings,
+} from "./settings-store";
+import {
+  LABEL_TICK_INTERVAL_MS,
+  limitsPollIntervalMs,
+  pillSettings,
+} from "../shared/settings";
 import { ShipPillIcon, shipPillLabel } from "./ship-pill";
 import {
   clearAllVerdicts,
@@ -30,12 +42,17 @@ import {
 
 /** Agents given a one-off refresh when the plugin starts. */
 const PRIME_LIMIT = 24;
-const LIMITS_POLL_INTERVAL_MS = 60_000;
+
 /**
+ * The read/write contracts the daemon registers for `pillSettings`. Pills are
+ * registered outside React, so the document is read over this RPC rather than
+ * with `useSettings`, and parked in `settings-store` for everything else.
+ *
  * Pill text is a plain string on the registration since 0.8, so the live reset
- * countdown is pushed with `update` on this beat instead of re-rendering.
+ * countdown is pushed with `update` on `LABEL_TICK_INTERVAL_MS` instead of
+ * re-rendering.
  */
-const LABEL_TICK_INTERVAL_MS = 1_000;
+const settingsIo = settingsRpc(pillSettings.id);
 
 type PillKind = "claude-limit" | "context" | "ship";
 
@@ -238,14 +255,15 @@ export function contributeClient(client: PluginClientContext) {
     shipInFlight.add(agentId);
     try {
       // Paseo submits a provider slash command as ordinary message text, so
-      // this is exactly what typing `/ship` into the composer does.
-      await client.paseo.agents.ref(agentId).send("/ship");
+      // this is exactly what typing the command into the composer does.
+      const command = readSettings().shipCommand;
+      await client.paseo.agents.ref(agentId).send(command);
     } catch (error) {
-      console.error("[paseo-composer-pills] /ship failed to send", error);
+      console.error("[paseo-composer-pills] ship command failed to send", error);
       // Paseo toasts a failed action's error message, so the rethrow names the
       // action. The raw transport error alone reads as an unattributed failure.
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Could not send /ship: ${reason}`, { cause: error });
+      throw new Error(`Could not send ${readSettings().shipCommand}: ${reason}`, { cause: error });
     } finally {
       shipInFlight.delete(agentId);
     }
@@ -488,10 +506,51 @@ export function contributeClient(client: PluginClientContext) {
     }
   })();
 
+  /**
+   * Reads the persisted document. Failures leave the store on its last good
+   * values, which are the schema defaults until the first read lands, so a
+   * settings read that never answers behaves like the old constants.
+   */
+  async function loadSettings(): Promise<void> {
+    try {
+      const result = await client.rpc(settingsIo.read, {});
+      if (disposed || result.status !== "ready") return;
+      const parsed = pillSettings.schema.safeParse(result.values);
+      if (parsed.success) writeSettings(parsed.data);
+    } catch (error) {
+      console.error("[paseo-composer-pills] failed to read settings", error);
+    }
+  }
+
+  // Settings first, so the compact gate is right by the time pills mount.
+  void loadSettings();
   void refreshLimits(false);
-  const poll = setInterval(() => void refreshLimits(false), LIMITS_POLL_INTERVAL_MS);
+
+  let pollIntervalMs = limitsPollIntervalMs(readSettings());
+  // The document is re-read on the poll beat, so a change saved on another
+  // client reaches this one without a plugin reload.
+  let poll = setInterval(pollTick, pollIntervalMs);
+
+  function pollTick(): void {
+    void refreshLimits(false);
+    void loadSettings();
+  }
+
+  /** Only ever called when the interval actually moved, so no beat is lost. */
+  function reschedulePoll(): void {
+    clearInterval(poll);
+    pollIntervalMs = limitsPollIntervalMs(readSettings());
+    poll = setInterval(pollTick, pollIntervalMs);
+  }
 
   const labelTick = setInterval(syncAllLabels, LABEL_TICK_INTERVAL_MS);
+
+  const unwatchSettings = subscribeToSettings(() => {
+    if (disposed) return;
+    if (limitsPollIntervalMs(readSettings()) !== pollIntervalMs) reschedulePoll();
+    // A new compact width can add or drop a pill on this very window.
+    syncAllPills();
+  });
 
   const unwatchCompact = watchCompact(() => {
     for (const agentId of workspaceByAgent.keys()) syncPills(agentId);
@@ -501,6 +560,7 @@ export function contributeClient(client: PluginClientContext) {
     disposed = true;
     clearInterval(poll);
     clearInterval(labelTick);
+    unwatchSettings();
     unwatchCompact();
     unsubscribe();
     for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
@@ -513,5 +573,6 @@ export function contributeClient(client: PluginClientContext) {
     clearAllUsage();
     clearAllVerdicts();
     clearLimits();
+    resetSettingsCache();
   };
 }

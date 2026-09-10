@@ -20,7 +20,7 @@ reports the reason instead of sending anything.
 
 ## Install
 
-Requires Paseo with `pluginsEnabled: true` (Settings → Plugins → Enable plugins).
+Requires Paseo 0.8 or later with `pluginsEnabled: true` (Settings → Plugins → Enable plugins).
 
 ```bash
 git clone https://github.com/frailbongat/paseo-composer-pills
@@ -84,7 +84,19 @@ The percentage can lag by up to 15 minutes. The countdown never does: the client
 
 ## Layout
 
-The row does not wrap or scroll, and Paseo's own diff pill shows up whenever the tree is dirty, which is exactly when the ship pill matters. Below 500pt window width the ship pill appears only when green, and takes the context pill's slot. Wider windows show all three.
+The row does not wrap or scroll, and Paseo's own diff pill shows up whenever the tree is dirty, which is exactly when the ship pill matters. Below the compact width, 500pt by default, the ship pill appears only when green, and takes the context pill's slot. Wider windows show all three.
+
+## Settings
+
+**Settings → Plugins → Composer pills**, or `Composer pill settings` in the Command Center (⌘K). Values are host-scoped: every client of that daemon shares them, and they survive reload and restart.
+
+| Setting | Default | What it changes |
+| --- | --- | --- |
+| Claude limit poll | 1 minute | How often the limits RPC runs. The reset countdown still redraws every second. |
+| Treat as a phone below | 500 px | The window width under which the layout rule above applies. `Never` shows all three pills at any width. |
+| Ship command | `/ship` | The text **Ship now** sends, in the pill menu and the panel. |
+
+The pill entrypoint registers pills outside React, where no hook can run, so it reads the document over the settings RPC into `client/settings-store.ts` and re-reads it on the poll beat. Saving in the screen writes the same store, so a change lands on the pills already on screen.
 
 ## Files
 
@@ -94,8 +106,9 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 
 | File | Runtime | Role |
 | --- | --- | --- |
-| `index.client.tsx` | client | Registers the three panels, the Command Center item, the pill entrypoint |
-| `index.server.ts` | server | Registers the RPC handlers and the turn-end hook |
+| `index.client.tsx` | client | Registers the settings screen, the three panels, the Command Center items, the pill entrypoint |
+| `index.server.ts` | server | Registers the settings document, the RPC handlers and the turn-end hook |
+| `client/settings-screen.tsx` / `client/settings-store.ts` / `shared/settings.ts` | both | Settings screen, client-side value cache, the persisted document and its defaults |
 | `client/pills.tsx` | client | Pill lifecycle, ordering, labels, agent tracking, limit polling |
 | `client/limit-pill.tsx` / `client/limit-readout.tsx` / `client/limit-panel.tsx` / `client/limits-store.ts` | client | Claude limit pill, the readout shared by its popover and panel, 1s ticker and countdown |
 | `client/context-pill.tsx` / `client/context-readout.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, the readout shared by its popover and panel, per-agent usage store |

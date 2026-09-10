@@ -4,11 +4,20 @@ import { CONTEXT_PANEL_ID } from "./client/context-pill";
 import { LimitPanel } from "./client/limit-panel";
 import { LIMIT_PANEL_ID } from "./client/limit-pill";
 import { contributeClient } from "./client/pills";
+import { SettingsScreen } from "./client/settings-screen";
 import { ShipPanel } from "./client/ship-panel";
 import { SHIP_PANEL_ID } from "./client/ship-pill";
 import { readShipVerdict } from "./shared/ship";
 
+const SETTINGS_SCREEN_ID = "settings";
+
 export default function contribute(client: PluginClientContext) {
+  client.addSettingsScreen({
+    id: SETTINGS_SCREEN_ID,
+    title: "Composer pills",
+    icon: "SlidersHorizontal",
+    Component: SettingsScreen,
+  });
   client.addWorkspacePanel({
     id: LIMIT_PANEL_ID,
     title: "Claude limits",
@@ -41,6 +50,16 @@ export default function contribute(client: PluginClientContext) {
       // cached verdict, then let the panel render the result it just warmed.
       await rpc(readShipVerdict, { cwd: agent.cwd, force: true, agentId: agent.id });
       openPanel(SHIP_PANEL_ID);
+    },
+  });
+  client.addCommandCenterItem({
+    id: "pill-settings",
+    title: "Composer pill settings",
+    icon: "SlidersHorizontal",
+    context: "global",
+    keywords: ["pills", "settings", "poll", "ship", "compact"],
+    onSelect({ openSettings }) {
+      openSettings(SETTINGS_SCREEN_ID);
     },
   });
   return contributeClient(client);

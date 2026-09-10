@@ -8,9 +8,15 @@ import {
 } from "./server/ship-cache";
 import { clearQualityCache } from "./server/ship";
 import { readClaudeLimits } from "./shared/limits";
+import { pillSettings } from "./shared/settings";
 import { readCachedShipVerdict, readShipVerdict, verdictLine } from "./shared/ship";
 
 export default function contribute(server: PluginServerContext) {
+  // Registers the daemon-side document plus its read/write/reset RPCs, which is
+  // what `useSettings` in the screen and `settingsRpc` in the pill entrypoint
+  // both talk to.
+  server.registerSettings(pillSettings);
+
   server.handle(readClaudeLimits, (input) => readClaudeLimitsHandler(input));
   server.handle(readShipVerdict, (input) => readShipVerdictRpc(input));
   server.handle(readCachedShipVerdict, (input) => readCachedShipVerdictRpc(input));
