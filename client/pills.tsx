@@ -40,15 +40,17 @@ type PillKind = "claude-limit" | "context" | "ship";
 
 /**
  * Paseo renders composer pills in registration order and offers no ordering
- * API, so this entrypoint owns all three pills and rebuilds an agent's pills in
- * this fixed order whenever the visible set changes.
+ * API, so this entrypoint registers all three pills once per agent in this
+ * fixed order and only ever toggles `visible`. Hiding preserves the
+ * registration, so a pill that comes back lands in its original slot instead of
+ * at the end of the row.
  */
 const PILL_ORDER: readonly PillKind[] = ["claude-limit", "context", "ship"];
 
 export function contributeClient(client: PluginClientContext) {
   const pillsByAgent = new Map<string, Map<PillKind, PluginButtonRegistration>>();
   const labelsByAgent = new Map<string, Map<PillKind, string>>();
-  const mountedByAgent = new Map<string, string>();
+  const visibleByAgent = new Map<string, Map<PillKind, boolean>>();
   const workspaceByAgent = new Map<string, string>();
   const cwdByAgent = new Map<string, string>();
   const statusByAgent = new Map<string, string>();
@@ -67,6 +69,7 @@ export function contributeClient(client: PluginClientContext) {
     kind: PillKind,
     workspaceId: string,
     agentId: string,
+    visible: boolean,
   ): PluginButtonRegistration {
     const label = pillLabel(kind, agentId);
 
@@ -79,6 +82,7 @@ export function contributeClient(client: PluginClientContext) {
           title: "Context window usage",
           icon: ContextPillIcon,
           ...(label === null ? {} : { label }),
+          visible,
           behavior: {
             kind: "action",
             onPress() {
@@ -98,6 +102,7 @@ export function contributeClient(client: PluginClientContext) {
           title: "Ship readiness",
           icon: ShipPillIcon,
           ...(label === null ? {} : { label }),
+          visible,
           behavior: {
             kind: "action",
             // Deliberately not async. Paseo greys the pill to 50% and mounts a
@@ -119,6 +124,7 @@ export function contributeClient(client: PluginClientContext) {
         title: "Claude usage limit",
         icon: LimitPillIcon,
         ...(label === null ? {} : { label }),
+        visible,
         behavior: {
           kind: "action",
           async onPress() {
@@ -203,42 +209,67 @@ export function contributeClient(client: PluginClientContext) {
     });
   }
 
-  function unmount(agentId: string): void {
+  function removeAgentPills(agentId: string): void {
     const pills = pillsByAgent.get(agentId);
     if (pills) for (const pill of pills.values()) pill.remove();
     pillsByAgent.delete(agentId);
     labelsByAgent.delete(agentId);
-    mountedByAgent.delete(agentId);
+    visibleByAgent.delete(agentId);
   }
 
-  function syncPills(agentId: string): void {
-    if (disposed) return;
-    const workspaceId = workspaceByAgent.get(agentId);
-    const desired = workspaceId ? desiredPills(agentId) : [];
-    const signature = desired.join(",");
-    if (signature === (mountedByAgent.get(agentId) ?? "")) {
-      syncLabels(agentId);
-      return;
-    }
-
-    // Order is registration order, so re-add the whole set on any change.
-    unmount(agentId);
-    if (!workspaceId || desired.length === 0) return;
-
+  /**
+   * Registers every pill in `PILL_ORDER` the first time an agent is seen, so
+   * registration order is fixed for the agent's whole life and slots never move.
+   */
+  function mountPills(workspaceId: string, agentId: string): void {
+    const desired = new Set(desiredPills(agentId));
     const pills = new Map<PillKind, PluginButtonRegistration>();
     const labels = new Map<PillKind, string>();
-    for (const kind of desired) {
+    const shown = new Map<PillKind, boolean>();
+
+    for (const kind of PILL_ORDER) {
+      const visible = desired.has(kind);
       try {
-        pills.set(kind, addPill(kind, workspaceId, agentId));
+        pills.set(kind, addPill(kind, workspaceId, agentId, visible));
+        shown.set(kind, visible);
         const label = pillLabel(kind, agentId);
         if (label !== null) labels.set(kind, label);
       } catch (error) {
         console.error(`[paseo-composer-pills] failed to add ${kind} pill`, error);
       }
     }
+
     pillsByAgent.set(agentId, pills);
     labelsByAgent.set(agentId, labels);
-    mountedByAgent.set(agentId, signature);
+    visibleByAgent.set(agentId, shown);
+  }
+
+  function syncPills(agentId: string): void {
+    if (disposed) return;
+    const workspaceId = workspaceByAgent.get(agentId);
+    if (!workspaceId) {
+      removeAgentPills(agentId);
+      return;
+    }
+
+    const pills = pillsByAgent.get(agentId);
+    if (!pills) {
+      mountPills(workspaceId, agentId);
+      return;
+    }
+
+    // Toggle in place. Re-adding would append the pill to the end of the row.
+    const desired = new Set(desiredPills(agentId));
+    const shown = visibleByAgent.get(agentId) ?? new Map<PillKind, boolean>();
+    for (const [kind, pill] of pills) {
+      const visible = desired.has(kind);
+      if (visible === shown.get(kind)) continue;
+      shown.set(kind, visible);
+      pill.update({ visible });
+    }
+    visibleByAgent.set(agentId, shown);
+
+    syncLabels(agentId);
   }
 
   function syncAllPills(): void {
@@ -315,7 +346,7 @@ export function contributeClient(client: PluginClientContext) {
     cwdByAgent.delete(agentId);
     statusByAgent.delete(agentId);
     claudeAgents.delete(agentId);
-    unmount(agentId);
+    removeAgentPills(agentId);
   }
 
   /** Entries from `agents.list()` may wrap the snapshot; accept either shape. */
@@ -384,7 +415,7 @@ export function contributeClient(client: PluginClientContext) {
     clearInterval(labelTick);
     unwatchCompact();
     unsubscribe();
-    for (const agentId of [...pillsByAgent.keys()]) unmount(agentId);
+    for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
     workspaceByAgent.clear();
     cwdByAgent.clear();
     statusByAgent.clear();
