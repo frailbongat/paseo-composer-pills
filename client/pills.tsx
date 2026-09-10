@@ -13,7 +13,6 @@ import {
   writeSettings,
 } from "./settings-store";
 import { LABEL_TICK_INTERVAL_MS, limitsPollIntervalMs, pillSettings } from "../shared/settings";
-import { clearAllVerdicts, clearVerdict } from "./ship-store";
 import {
   clearAllUsage,
   clearUsage,
@@ -47,8 +46,8 @@ type PillKind = "claude-limit" | "context";
  * the row.
  *
  * Ship is not in this list. Its verdict is a paragraph of blockers rather than
- * a number, and its action belongs next to those blockers, so both live on the
- * timeline ship card instead.
+ * a number, and its action belongs next to those blockers, so it lives on a
+ * timeline card in `paseo-ship-check` instead.
  */
 const PILL_ORDER: readonly PillKind[] = ["claude-limit", "context"];
 
@@ -236,9 +235,6 @@ export function contributeClient(client: PluginClientContext) {
 
   function forget(agentId: string): void {
     clearUsage(agentId);
-    // The verdict store outlives the pills: the panel and `/ship-check` write
-    // into it. An agent that is gone still has to leave it.
-    clearVerdict(agentId);
     workspaceByAgent.delete(agentId);
     claudeAgents.delete(agentId);
     removeAgentPills(agentId);
@@ -340,7 +336,6 @@ export function contributeClient(client: PluginClientContext) {
     workspaceByAgent.clear();
     claudeAgents.clear();
     clearAllUsage();
-    clearAllVerdicts();
     clearLimits();
     resetSettingsCache();
   };

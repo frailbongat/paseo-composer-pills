@@ -7,10 +7,10 @@
  * | Setting             | Replaced constant                              |
  * | ------------------- | ---------------------------------------------- |
  * | `limitsPollSeconds` | `LIMITS_POLL_INTERVAL_MS = 60_000` (pills.tsx) |
- * | `shipCommand`       | the literal `"/ship"` (ship-card.tsx)          |
  *
  * `compactWidth` was here too. It only ever decided which pill kept its slot on
- * a phone, and the ship pill it arbitrated is gone.
+ * a phone, and the ship pill it arbitrated is gone. `shipCommand` left with the
+ * ship itself, which now lives in `paseo-ship-check`.
  */
 
 import { defineSettings } from "@getpaseo/plugin";
@@ -18,8 +18,6 @@ import { z } from "zod";
 
 /** The Claude limits poll, which was `LIMITS_POLL_INTERVAL_MS / 1_000`. */
 export const DEFAULT_LIMITS_POLL_SECONDS = 60;
-/** What the ship card's button sends into the composer. */
-export const DEFAULT_SHIP_COMMAND = "/ship";
 
 /**
  * The countdown redraw stays fixed. It is a clock rather than a poll: it costs
@@ -41,7 +39,6 @@ export const pillSettings = defineSettings({
       .min(5)
       .max(3_600)
       .default(DEFAULT_LIMITS_POLL_SECONDS),
-    shipCommand: z.string().trim().min(1).max(200).default(DEFAULT_SHIP_COMMAND),
   }),
 });
 
