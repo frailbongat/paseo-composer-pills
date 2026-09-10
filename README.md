@@ -43,7 +43,7 @@ No token means no limit pill. Tokens never reach the client bundle.
 
 ## Ship readiness
 
-The verdict mirrors the ship extension step for step, because a pill that disagrees with `/ship` is worse than no pill. It re-reads at the end of every agent turn, on a 60s backstop poll for idle agents, and from **Re-check ship readiness** in the Command Center (⌘K).
+The verdict mirrors the ship extension step for step, because a pill that disagrees with `/ship` is worse than no pill. The daemon recomputes it when a turn ends, through an `agent.turn_ended` lifecycle hook, and parks it per agent. That runs with no app connected, so the pill and the panel read a finished verdict the moment the tab opens instead of starting a check and spinning. **Re-check ship readiness** in the Command Center (⌘K) and the panel's **Re-check** button force a fresh run.
 
 Blockers, in the order `/ship` hits them:
 
@@ -84,7 +84,7 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 | File | Runtime | Role |
 | --- | --- | --- |
 | `index.client.tsx` | client | Registers the three panels, the Command Center item, the pill entrypoint |
-| `index.server.ts` | server | Registers the RPC handlers |
+| `index.server.ts` | server | Registers the RPC handlers and the turn-end hook |
 | `client/pills.tsx` | client | Pill lifecycle, ordering, labels, agent tracking, limit polling |
 | `client/limit-pill.tsx` / `client/limit-panel.tsx` / `client/limits-store.ts` | client | Claude limit pill, panel, 1s ticker and countdown |
 | `client/context-pill.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, panel, per-agent usage store |
@@ -92,6 +92,7 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 | `shared/limits.ts` / `shared/ship.ts` | shared | Zod RPC contracts, versioned verdict schema and helpers |
 | `server/limits.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
 | `server/ship.ts` | server | Git plumbing, quality checks, quality cache |
+| `server/ship-cache.ts` | server | Per-agent verdict cache filled at turn end, read by the pill |
 
 ## Develop
 

@@ -37,9 +37,9 @@ export default function contribute(client: PluginClientContext) {
     context: "agent",
     keywords: ["ship", "blockers", "lint", "git"],
     async onSelect({ agent, rpc, openPanel }) {
-      // Force past the quality cache, then let the panel render the result it
-      // just warmed.
-      await rpc(readShipVerdict, { cwd: agent.cwd, force: true });
+      // Force past the quality cache and store the result as this agent's
+      // cached verdict, then let the panel render the result it just warmed.
+      await rpc(readShipVerdict, { cwd: agent.cwd, force: true, agentId: agent.id });
       openPanel(SHIP_PANEL_ID);
     },
   });

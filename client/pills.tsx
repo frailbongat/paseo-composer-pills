@@ -12,7 +12,7 @@ import {
   watchCompact,
   writeVerdict,
 } from "./ship-store";
-import { hasVerdict, isReady, readShipVerdict } from "../shared/ship";
+import { hasVerdict, isReady, readCachedShipVerdict } from "../shared/ship";
 import {
   clearAllUsage,
   clearUsage,
@@ -25,11 +25,6 @@ import {
 /** Agents given a one-off refresh when the plugin starts. */
 const PRIME_LIMIT = 24;
 const LIMITS_POLL_INTERVAL_MS = 60_000;
-/**
- * The verdict only moves when the tree moves, and the end of a turn already
- * forces a re-read, so this is a backstop for edits made outside the agent.
- */
-const SHIP_POLL_INTERVAL_MS = 60_000;
 /**
  * Pill text is a plain string on the registration since 0.8, so the live reset
  * countdown is pushed with `update` on this beat instead of re-rendering.
@@ -53,9 +48,10 @@ export function contributeClient(client: PluginClientContext) {
   const visibleByAgent = new Map<string, Map<PillKind, boolean>>();
   const workspaceByAgent = new Map<string, string>();
   const cwdByAgent = new Map<string, string>();
-  const statusByAgent = new Map<string, string>();
   const claudeAgents = new Set<string>();
   const shipInFlight = new Set<string>();
+  /** Agents with a cached-verdict read already on the wire. */
+  const verdictReads = new Set<string>();
   let disposed = false;
 
   /** Current pill text, or null when the store has nothing to show yet. */
@@ -168,8 +164,7 @@ export function contributeClient(client: PluginClientContext) {
     if (shipInFlight.has(agentId)) return;
 
     const verdict = readVerdict(agentId);
-    const idle = statusByAgent.get(agentId) === "idle";
-    if (!verdict || !isReady(verdict) || !idle) {
+    if (!verdict || !isReady(verdict) || !isIdle(agentId)) {
       client.openPanel(SHIP_PANEL_ID, { workspaceId, agentId });
       return;
     }
@@ -288,12 +283,28 @@ export function contributeClient(client: PluginClientContext) {
     }
   }
 
-  async function refreshShip(agentId: string, force: boolean): Promise<void> {
+  /**
+   * Reads the verdict the daemon already computed. Nothing here decides when a
+   * verdict is due: the daemon recomputes on every turn end, with or without an
+   * app connected, so this only has to pick the answer up.
+   */
+  async function readShip(agentId: string, notBefore?: string): Promise<void> {
     const cwd = cwdByAgent.get(agentId);
-    if (!cwd || disposed) return;
+    if (!cwd || disposed || verdictReads.has(agentId)) return;
+
+    verdictReads.add(agentId);
     try {
-      const verdict = await client.rpc(readShipVerdict, { cwd, force });
+      // `notBefore` is this agent's last activity, so a verdict from before the
+      // turn that just ended is refused rather than shown.
+      const verdict = await client.rpc(readCachedShipVerdict, {
+        agentId,
+        cwd,
+        ...(notBefore === null || notBefore === undefined ? {} : { notBefore }),
+      });
       if (disposed) return;
+      // An unchanged verdict is the common answer, and writing it would wake
+      // every subscribed pill and panel for nothing.
+      if (readVerdict(agentId)?.checkedAt === verdict.checkedAt) return;
       writeVerdict(agentId, verdict);
       if (verdict.error !== null) {
         console.error(`[paseo-composer-pills] ship verdict: ${verdict.error}`);
@@ -301,6 +312,17 @@ export function contributeClient(client: PluginClientContext) {
       syncPills(agentId);
     } catch (error) {
       console.error("[paseo-composer-pills] failed to read ship verdict", error);
+    } finally {
+      verdictReads.delete(agentId);
+    }
+  }
+
+  /** Live status, read at the moment it is needed rather than remembered. */
+  function isIdle(agentId: string): boolean {
+    try {
+      return readString(client.paseo.agents.ref(agentId).current(), "status") === "idle";
+    } catch {
+      return false;
     }
   }
 
@@ -315,16 +337,13 @@ export function contributeClient(client: PluginClientContext) {
     const knownCwd = cwdByAgent.get(agentId);
     if (cwd && cwd !== knownCwd) cwdByAgent.set(agentId, cwd);
 
-    // The end of a turn is when the tree has just stopped moving, which is the
-    // only moment the verdict is worth paying for.
-    const status = readString(agentSnapshot, "status");
-    const previous = statusByAgent.get(agentId);
-    if (status) statusByAgent.set(agentId, status);
-    const turnEnded = status === "idle" && previous !== undefined && previous !== "idle";
+    // Picking the daemon's answer up is a map lookup there, so this asks on the
+    // first sight of an agent and again whenever a settled one reports in. A
+    // running agent is skipped because its verdict cannot have moved yet.
     const firstLook = cwd !== null && cwd !== knownCwd;
-    // Never forced: the cache key already carries the tree's dirty state, so a
-    // turn that changed nothing reuses the previous quality run.
-    if (turnEnded || firstLook) void refreshShip(agentId, false);
+    if (firstLook || readString(agentSnapshot, "status") === "idle") {
+      void readShip(agentId, readString(agentSnapshot, "lastActivityAt") ?? undefined);
+    }
 
     if (isClaudeAgent(readString(agentSnapshot, "provider"), readString(agentSnapshot, "model"))) {
       claudeAgents.add(agentId);
@@ -344,7 +363,7 @@ export function contributeClient(client: PluginClientContext) {
     clearVerdict(agentId);
     workspaceByAgent.delete(agentId);
     cwdByAgent.delete(agentId);
-    statusByAgent.delete(agentId);
+    verdictReads.delete(agentId);
     claudeAgents.delete(agentId);
     removeAgentPills(agentId);
   }
@@ -394,14 +413,6 @@ export function contributeClient(client: PluginClientContext) {
   void refreshLimits(false);
   const poll = setInterval(() => void refreshLimits(false), LIMITS_POLL_INTERVAL_MS);
 
-  // Only idle agents, so a verdict is never computed against a tree the agent
-  // is still writing to.
-  const shipPoll = setInterval(() => {
-    for (const agentId of cwdByAgent.keys()) {
-      if (statusByAgent.get(agentId) === "idle") void refreshShip(agentId, false);
-    }
-  }, SHIP_POLL_INTERVAL_MS);
-
   const labelTick = setInterval(syncAllLabels, LABEL_TICK_INTERVAL_MS);
 
   const unwatchCompact = watchCompact(() => {
@@ -411,14 +422,13 @@ export function contributeClient(client: PluginClientContext) {
   return () => {
     disposed = true;
     clearInterval(poll);
-    clearInterval(shipPoll);
     clearInterval(labelTick);
     unwatchCompact();
     unsubscribe();
     for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
     workspaceByAgent.clear();
     cwdByAgent.clear();
-    statusByAgent.clear();
+    verdictReads.clear();
     claudeAgents.clear();
     shipInFlight.clear();
     clearAllUsage();

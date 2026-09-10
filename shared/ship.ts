@@ -57,12 +57,44 @@ export const ShipVerdictSchema = z.object({
 
 export type ShipVerdict = z.infer<typeof ShipVerdictSchema>;
 
+/**
+ * Compute a verdict now. The manual re-check and the Command Center item use
+ * this; nothing else should, because it pays for git and the quality tools.
+ * Passing `agentId` also stores the result as that agent's cached verdict, so a
+ * re-check moves the pill and the panel together.
+ */
 export const readShipVerdict = defineRpc({
   name: "ship.verdict.read",
   input: z.object({
     cwd: z.string(),
     /** Bypass the quality cache. The manual re-check sets this. */
     force: z.boolean().optional(),
+    /** Store the result as this agent's cached verdict. */
+    agentId: z.string().optional(),
+  }),
+  output: ShipVerdictSchema,
+});
+
+/**
+ * Read the verdict the daemon computed when this agent's last turn ended.
+ *
+ * The daemon owns the schedule, so this is a map lookup in the common case and
+ * answers instantly however long the app was away. A miss, which is an agent
+ * that has not finished a turn since the daemon started, computes once and
+ * caches, so the first look still fills the pill.
+ *
+ * `notBefore` is the agent's last activity. The daemon's turn-end hook and this
+ * read race each other by nature, so rather than guess who won, the caller
+ * states the moment its answer has to be newer than and the daemon either
+ * serves a verdict that clears it, joins the run already in flight, or starts
+ * one. That also covers a turn-end computation that failed.
+ */
+export const readCachedShipVerdict = defineRpc({
+  name: "ship.verdict.cached",
+  input: z.object({
+    agentId: z.string(),
+    cwd: z.string(),
+    notBefore: z.string().optional(),
   }),
   output: ShipVerdictSchema,
 });

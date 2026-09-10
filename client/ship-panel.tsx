@@ -3,13 +3,14 @@ import { type PluginAgentPanelProps, useAgent, usePaseo, useRpc } from "@getpase
 import { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { shipColor } from "./ship-pill";
-import { useShipVerdict, writeVerdict } from "./ship-store";
+import { readVerdict, useShipVerdict, writeVerdict } from "./ship-store";
 import {
   type ShipCheck,
   blockingChecks,
   branchLine,
   isReady,
   passedCount,
+  readCachedShipVerdict,
   readShipVerdict,
   verdictLine,
   warningChecks,
@@ -38,31 +39,62 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   const verdict = useShipVerdict(agentId);
   const cwd = useAgent(agentId, (agent) => agent.cwd);
   const status = useAgent(agentId, (agent) => agent.status);
-  const read = useRpc(readShipVerdict);
+  const lastActivityAt = useAgent(agentId, (agent) => agent.lastActivityAt);
+  const readCached = useRpc(readCachedShipVerdict);
+  const recheck = useRpc(readShipVerdict);
   const paseo = usePaseo();
   const [pending, setPending] = useState(false);
   const [shipping, setShipping] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
-  const refresh = useCallback(
-    async (force: boolean) => {
-      if (!cwd) return;
-      setPending(true);
-      setFailure(null);
-      try {
-        writeVerdict(agentId, await read({ cwd, force }));
-      } catch (error) {
-        setFailure(error instanceof Error ? error.message : String(error));
-      } finally {
-        setPending(false);
-      }
-    },
-    [agentId, cwd, read],
-  );
+  /**
+   * The daemon recomputed this when the last turn ended, so opening the tab is
+   * a read, not a run. Only a first look with nothing cached anywhere shows
+   * pending, and even that is one round trip rather than a git and lint pass.
+   */
+  const load = useCallback(async () => {
+    // A running agent is still writing to the tree, and its activity clock is
+    // still moving, so asking now would buy a verdict that is wrong by the time
+    // it lands. The daemon posts one when the turn ends and this runs again.
+    if (!cwd || status === "running") return;
+    const cold = readVerdict(agentId) === null;
+    if (cold) setPending(true);
+    setFailure(null);
+    try {
+      // The floor makes this correct however the daemon ordered the turn-end
+      // computation against this read.
+      const fresh = await readCached({
+        agentId,
+        cwd,
+        ...(lastActivityAt ? { notBefore: lastActivityAt } : {}),
+      });
+      writeVerdict(agentId, fresh);
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (cold) setPending(false);
+    }
+  }, [agentId, cwd, lastActivityAt, readCached, status]);
+
+  /** The manual re-check, which is the only thing that pays for a fresh run. */
+  const refresh = useCallback(async () => {
+    if (!cwd) return;
+    setPending(true);
+    setFailure(null);
+    try {
+      // `agentId` stores the result as this agent's cached verdict, so the pill
+      // moves with the panel instead of keeping the verdict this replaced.
+      writeVerdict(agentId, await recheck({ cwd, force: true, agentId }));
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPending(false);
+    }
+  }, [agentId, cwd, recheck]);
 
   useEffect(() => {
-    void refresh(false);
-  }, [refresh]);
+    void load();
+  }, [load]);
 
   const ship = useCallback(async () => {
     setShipping(true);
@@ -150,7 +182,7 @@ export function ShipPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
           accessibilityRole="button"
           accessibilityLabel="Re-check ship readiness"
           disabled={pending}
-          onPress={() => void refresh(true)}
+          onPress={() => void refresh()}
           style={{
             paddingHorizontal: 14,
             paddingVertical: 8,
