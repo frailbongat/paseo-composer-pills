@@ -17,10 +17,16 @@ and **Context** are still there for anyone who wants a tab.
 The ticket comes from the agent's own timeline, not from an agent label, so an agent you prompted by
 hand gets the same pill as one a board dispatched.
 
-- The one-off scan reads the oldest page of the timeline, where the opening prompt is, and takes the
-  first `https://github.com/<owner>/<repo>/(issues|pull)/<number>` it finds in a user message. A
-  markdown link, angle brackets, `?query`, `#fragment`, a trailing slash or full stop all still
-  match. Anything that is not a positive integer draws nothing at all.
+- The one-off scan reads the oldest page of the timeline, where the opening prompt is, and takes a
+  `https://github.com/<owner>/<repo>/(issues|pull)/<number>` out of a user message. A markdown link,
+  angle brackets, `?query`, `#fragment`, a trailing slash or full stop all still match. Anything
+  that is not a positive integer draws nothing at all.
+- A message that cites two tickets is read by the words around each link, because a prompt pointed
+  at a map or a spec names the parent first and the ticket second: `/skill:wayfinder <map>` followed
+  by `The ticket is <url>` draws the ticket, not the map. Words like `parent`, `part of`, `spec`,
+  `epic` or `blocked by` push a link down; `the ticket`, `fixes`, `implement` or `work on` push it
+  up; the argument of a bare slash command counts as neither. With nothing to go on the first link
+  still wins, and a single link always wins however it is introduced.
 - First match wins and sticks for the agent's life. Until one is found the plugin keeps watching new
   prompts; once found it stops watching.
 - The label is built from prompt text only, never from the network or `gh`. `#112` on its own, plus
