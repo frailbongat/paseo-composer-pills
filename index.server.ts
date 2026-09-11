@@ -10,4 +10,9 @@ export default function contribute(server: PluginServerContext) {
   server.registerSettings(pillSettings);
 
   server.handle(readClaudeLimits, (input) => readClaudeLimitsHandler(input));
+
+  // The daemon rejects a contribution that returns nothing, and a rejected
+  // reload leaves the previously loaded build running. Nothing here owns a
+  // timer or a subscription, so the cleanup is empty on purpose.
+  return () => {};
 }
