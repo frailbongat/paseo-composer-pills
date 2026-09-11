@@ -6,6 +6,16 @@ import { LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
 import { LimitPopover } from "./limit-readout";
 import { clearLimits, findWindow, readLimits, writeLimits } from "./limits-store";
 import { readClaudeLimits } from "../shared/limits";
+import { createTicketScanner } from "./ticket-scan";
+import {
+  clearAllTickets,
+  clearTicket,
+  readTicket,
+  repoSlugFromProject,
+  ticketPillLabel,
+  writeAgentRepo,
+} from "./ticket-store";
+import { openExternal } from "./web";
 import {
   readSettings,
   resetSettingsCache,
@@ -36,7 +46,7 @@ const PRIME_LIMIT = 24;
  */
 const settingsIo = settingsRpc(pillSettings.id);
 
-type PillKind = "claude-limit" | "context";
+type PillKind = "claude-limit" | "context" | "ticket";
 
 /**
  * Paseo renders composer pills in registration order and offers no ordering
@@ -48,8 +58,13 @@ type PillKind = "claude-limit" | "context";
  * Ship is not in this list. Its verdict is a paragraph of blockers rather than
  * a number, and its action belongs next to those blockers, so it lives on a
  * timeline card in `paseo-ship-check` instead.
+ *
+ * Ticket comes last on purpose. The two meters are on every agent and read
+ * left to right as one gauge; the ticket is a link, it only shows up on the
+ * agents that cite one, and a slot at the end is the one that can sit empty
+ * without a hole in the row.
  */
-const PILL_ORDER: readonly PillKind[] = ["claude-limit", "context"];
+const PILL_ORDER: readonly PillKind[] = ["claude-limit", "context", "ticket"];
 
 export function contributeClient(client: PluginClientContext) {
   const pillsByAgent = new Map<string, Map<PillKind, PluginButtonRegistration>>();
@@ -59,9 +74,17 @@ export function contributeClient(client: PluginClientContext) {
   const claudeAgents = new Set<string>();
   let disposed = false;
 
+  // Reads each agent's opening prompt once, then keeps watching for a later one
+  // only while that agent still has no ticket. `syncPills` is what turns the
+  // answer into a visible pill.
+  const ticketScanner = createTicketScanner(client, (agentId) => {
+    if (!disposed) syncPills(agentId);
+  });
+
   /** Current pill text, or null when the store has nothing to show yet. */
   function pillLabel(kind: PillKind, agentId: string): string | null {
     if (kind === "context") return contextPillLabel(agentId);
+    if (kind === "ticket") return ticketPillLabel(agentId);
     return limitPillLabel(Date.now());
   }
 
@@ -72,6 +95,32 @@ export function contributeClient(client: PluginClientContext) {
     visible: boolean,
   ): PluginButtonRegistration {
     const label = pillLabel(kind, agentId);
+
+    if (kind === "ticket") {
+      return client.addComposerPill({
+        id: "ticket",
+        workspaceId,
+        agentId,
+        button: {
+          title: "Open the ticket on GitHub",
+          icon: "CircleDot",
+          ...(label === null ? {} : { label }),
+          visible,
+          // Press opens the ticket, and that is all. Paseo has no split-button
+          // behavior, so a menu would put the ticket one press further away.
+          behavior: {
+            kind: "action",
+            // The URL is already parsed, so there is no round trip here. A
+            // rejection is left to propagate: Paseo holds the pill busy until
+            // this settles and toasts the failure.
+            async onPress() {
+              const ticket = readTicket(agentId);
+              if (ticket !== null) await openExternal(ticket.url);
+            },
+          },
+        },
+      });
+    }
 
     if (kind === "context") {
       return client.addComposerPill({
@@ -130,8 +179,13 @@ export function contributeClient(client: PluginClientContext) {
   function desiredPills(agentId: string): PillKind[] {
     const hasLimit = findWindow(readLimits()) !== null && claudeAgents.has(agentId);
     const hasUsage = readUsage(agentId) !== null;
+    const hasTicket = readTicket(agentId) !== null;
 
-    return PILL_ORDER.filter((kind) => (kind === "claude-limit" ? hasLimit : hasUsage));
+    return PILL_ORDER.filter((kind) => {
+      if (kind === "claude-limit") return hasLimit;
+      if (kind === "context") return hasUsage;
+      return hasTicket;
+    });
   }
 
   function removeAgentPills(agentId: string): void {
@@ -213,12 +267,26 @@ export function contributeClient(client: PluginClientContext) {
     }
   }
 
-  function observe(agentSnapshot: unknown): void {
+  function observe(agentSnapshot: unknown, project?: unknown): void {
     const agentId = readString(agentSnapshot, "id");
     if (!agentId) return;
 
     const workspaceId = readString(agentSnapshot, "workspaceId");
-    if (workspaceId) workspaceByAgent.set(agentId, workspaceId);
+    if (workspaceId) {
+      // A pill's target cannot be moved, so an agent that changed workspace is
+      // a genuine remove-then-add rather than an update.
+      if (workspaceByAgent.get(agentId) !== workspaceId) removeAgentPills(agentId);
+      workspaceByAgent.set(agentId, workspaceId);
+    }
+
+    // Which repo the agent is checked out on, so a link into another repo can
+    // say `owner/repo#112` instead of passing for a local ticket.
+    const ownRepo = repoSlugFromProject(project);
+    if (ownRepo) writeAgentRepo(agentId, ownRepo);
+
+    // One bounded timeline read per agent, and only for agents that have
+    // somewhere to put a pill.
+    if (workspaceId) ticketScanner.track(agentId);
 
     if (isClaudeAgent(readString(agentSnapshot, "provider"), readString(agentSnapshot, "model"))) {
       claudeAgents.add(agentId);
@@ -235,6 +303,8 @@ export function contributeClient(client: PluginClientContext) {
 
   function forget(agentId: string): void {
     clearUsage(agentId);
+    ticketScanner.forget(agentId);
+    clearTicket(agentId);
     workspaceByAgent.delete(agentId);
     claudeAgents.delete(agentId);
     removeAgentPills(agentId);
@@ -248,12 +318,20 @@ export function contributeClient(client: PluginClientContext) {
     return entry;
   }
 
+  /** The placement alongside a wrapped snapshot, which carries the git remote. */
+  function unwrapProject(entry: unknown): unknown {
+    if (entry && typeof entry === "object" && "project" in entry) {
+      return (entry as { project: unknown }).project;
+    }
+    return null;
+  }
+
   const unsubscribe = client.paseo.agents.subscribe((update) => {
     if (update.kind === "remove") {
       forget(update.agentId);
       return;
     }
-    observe(update.agent);
+    observe(update.agent, update.project);
   });
 
   // Existing agents may never emit an update until their next turn, so prime
@@ -263,12 +341,11 @@ export function contributeClient(client: PluginClientContext) {
       const result = await client.paseo.agents.list();
       if (disposed) return;
 
-      const snapshots = (result.entries as readonly unknown[])
-        .map(unwrapAgent)
-        .slice(0, PRIME_LIMIT);
+      const entries = (result.entries as readonly unknown[]).slice(0, PRIME_LIMIT);
 
-      for (const snapshot of snapshots) {
-        observe(snapshot);
+      for (const entry of entries) {
+        const snapshot = unwrapAgent(entry);
+        observe(snapshot, unwrapProject(entry));
         const agentId = readString(snapshot, "id");
         if (!agentId || readUsage(agentId) !== null) continue;
 
@@ -332,9 +409,11 @@ export function contributeClient(client: PluginClientContext) {
     clearInterval(labelTick);
     unwatchSettings();
     unsubscribe();
+    ticketScanner.dispose();
     for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
     workspaceByAgent.clear();
     claudeAgents.clear();
+    clearAllTickets();
     clearAllUsage();
     clearLimits();
     resetSettingsCache();

@@ -1,6 +1,6 @@
 {
   "name": "paseo-composer-pills",
-  "description": "Composer status pills for Paseo: Claude rate-limit headroom with a live reset countdown, and per-agent context window usage.",
+  "description": "Composer status pills for Paseo: Claude rate-limit headroom with a live reset countdown, per-agent context window usage, and the GitHub ticket an agent's conversation cites.",
   "private": true,
   "version": "0.0.0",
   "scripts": {
