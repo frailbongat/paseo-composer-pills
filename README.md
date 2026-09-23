@@ -32,8 +32,8 @@ hand gets the same pill as one a board dispatched.
 - The label is built from prompt text only, never from the network or `gh`. `#112` on its own, plus
   the slash command that took it when the same message starts with one (`/skill:route` reads
   `#112 · Route`), and `owner/repo#112` when the link points outside the agent's own checkout.
-- Pressing hands the URL to `shell.openExternal` on desktop, so the ticket opens in your default
-  browser with your logins, not in a chrome-less Electron window.
+- Pressing hands the URL to Paseo's `openExternalUrl`, so on desktop the ticket opens in your
+  default browser with your logins, not in a chrome-less Electron window.
 
 Nothing here depends on [`paseo-ticket-board`](https://github.com/frailbongat/paseo-ticket-board):
 not its labels, not its RPCs, not its constants.
@@ -44,7 +44,7 @@ of blockers rather than a number and never fitted in a pill. Nothing here depend
 
 ## Install
 
-Requires Paseo 0.8 or later with `pluginsEnabled: true` (Settings → Plugins → Enable plugins).
+Requires Paseo 0.9 or later with `pluginsEnabled: true` (Settings → Plugins → Enable plugins).
 
 ```bash
 git clone https://github.com/frailbongat/paseo-composer-pills
@@ -102,7 +102,7 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 | `index.client.tsx` | client | Registers the settings screen, both panels, the Command Center item, the pill entrypoint |
 | `index.server.ts` | server | Registers the settings document and the limits RPC handler |
 | `client/pills.tsx` | client | Pill lifecycle, ordering, labels, agent tracking, limit polling |
-| `client/ticket-scan.ts` / `client/ticket-store.ts` / `client/web.ts` | client | Ticket pill: the bounded timeline read, URL parsing and label, opening the reader's browser |
+| `client/ticket-scan.ts` / `client/ticket-store.ts` | client | Ticket pill: the bounded timeline read, URL parsing and label |
 | `client/limit-pill.tsx` / `client/limit-readout.tsx` / `client/limit-panel.tsx` / `client/limits-store.ts` | client | Claude limit pill, the readout shared by its popover and panel, 1s ticker and countdown |
 | `client/context-pill.tsx` / `client/context-readout.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, the readout shared by its popover and panel, per-agent usage store |
 | `client/settings-screen.tsx` / `client/settings-store.ts` / `shared/settings.ts` | both | Settings screen, client-side value cache, the persisted document and its defaults |

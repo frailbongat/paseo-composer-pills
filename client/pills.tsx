@@ -1,5 +1,9 @@
 import { settingsRpc } from "@getpaseo/plugin";
-import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
+import {
+  openExternalUrl,
+  type PluginButtonRegistration,
+  type PluginClientContext,
+} from "@getpaseo/plugin/client";
 import { ContextPillIcon, contextPillLabel } from "./context-pill";
 import { ContextPopover } from "./context-readout";
 import { LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
@@ -15,7 +19,6 @@ import {
   ticketPillLabel,
   writeAgentRepo,
 } from "./ticket-store";
-import { openExternal } from "./web";
 import {
   readSettings,
   resetSettingsCache,
@@ -110,12 +113,14 @@ export function contributeClient(client: PluginClientContext) {
           // behavior, so a menu would put the ticket one press further away.
           behavior: {
             kind: "action",
-            // The URL is already parsed, so there is no round trip here. A
-            // rejection is left to propagate: Paseo holds the pill busy until
-            // this settles and toasts the failure.
+            // The URL is already parsed, so there is no round trip here.
+            // `openExternalUrl` sends it to the default browser on desktop,
+            // a new tab on web, and the system opener on native. A rejection
+            // is left to propagate: Paseo holds the pill busy until this
+            // settles and toasts the failure.
             async onPress() {
               const ticket = readTicket(agentId);
-              if (ticket !== null) await openExternal(ticket.url);
+              if (ticket !== null) await openExternalUrl(ticket.url);
             },
           },
         },
