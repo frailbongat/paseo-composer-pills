@@ -339,12 +339,21 @@ export function contributeClient(client: PluginClientContext) {
     observe(update.agent, update.project);
   });
 
+  // Since 0.9, `agents.subscribe` is only a local listener: the daemon streams
+  // `agent_update` only to a connection holding a list subscription. Without
+  // this, pills see the agents present at startup and never a new session.
+  let agentFeed: { release(): Promise<void> } | null = null;
+
   // Existing agents may never emit an update until their next turn, so prime
   // them once at startup.
   void (async () => {
     try {
-      const result = await client.paseo.agents.list();
-      if (disposed) return;
+      const result = await client.paseo.agents.list({ subscribe: {} });
+      if (disposed) {
+        void result.subscription.release().catch(() => {});
+        return;
+      }
+      agentFeed = result.subscription;
 
       const entries = (result.entries as readonly unknown[]).slice(0, PRIME_LIMIT);
 
@@ -414,6 +423,9 @@ export function contributeClient(client: PluginClientContext) {
     clearInterval(labelTick);
     unwatchSettings();
     unsubscribe();
+    agentFeed?.release().catch((error) => {
+      console.error("[paseo-composer-pills] failed to release the agent feed", error);
+    });
     ticketScanner.dispose();
     for (const agentId of [...pillsByAgent.keys()]) removeAgentPills(agentId);
     workspaceByAgent.clear();
