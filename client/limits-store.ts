@@ -6,7 +6,12 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { FIVE_HOUR_ID, type LimitWindow, type LimitsSnapshot } from "../shared/limits";
+import {
+  FIVE_HOUR_ID,
+  type LimitWindow,
+  type LimitsSnapshot,
+  SEVEN_DAY_ID,
+} from "../shared/limits";
 
 const listeners = new Set<() => void>();
 let snapshot: LimitsSnapshot | null = null;
@@ -50,6 +55,15 @@ export function findWindow(
   id: string = FIVE_HOUR_ID,
 ): LimitWindow | null {
   return limits?.windows.find((window) => window.id === id) ?? null;
+}
+
+/**
+ * The window the pill speaks for. The weekly allowance is the one that decides
+ * whether the week survives, so it leads; the 5-hour window is the fallback for
+ * accounts that only report the session limit, and both stay in the popover.
+ */
+export function findPillWindow(limits: LimitsSnapshot | null): LimitWindow | null {
+  return findWindow(limits, SEVEN_DAY_ID) ?? findWindow(limits, FIVE_HOUR_ID);
 }
 
 /** Percent of the window still available, 0-100. */

@@ -4,7 +4,7 @@ import { ContextPillIcon, contextPillLabel } from "./context-pill";
 import { ContextPopover } from "./context-readout";
 import { LimitPillIcon, isClaudeAgent, limitPillLabel } from "./limit-pill";
 import { LimitPopover } from "./limit-readout";
-import { clearLimits, findWindow, readLimits, writeLimits } from "./limits-store";
+import { clearLimits, findPillWindow, readLimits, writeLimits } from "./limits-store";
 import { readClaudeLimits } from "../shared/limits";
 import { createTicketScanner } from "./ticket-scan";
 import {
@@ -145,7 +145,7 @@ export function contributeClient(client: PluginClientContext) {
       workspaceId,
       agentId,
       button: {
-        title: "Claude usage limit",
+        title: "Claude weekly usage limit",
         icon: LimitPillIcon,
         ...(label === null ? {} : { label }),
         visible,
@@ -177,7 +177,7 @@ export function contributeClient(client: PluginClientContext) {
 
   /** A pill with nothing to say is hidden rather than shown empty. */
   function desiredPills(agentId: string): PillKind[] {
-    const hasLimit = findWindow(readLimits()) !== null && claudeAgents.has(agentId);
+    const hasLimit = findPillWindow(readLimits()) !== null && claudeAgents.has(agentId);
     const hasUsage = readUsage(agentId) !== null;
     const hasTicket = readTicket(agentId) !== null;
 

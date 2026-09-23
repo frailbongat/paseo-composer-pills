@@ -1,8 +1,9 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
-/** Rolling window ID reported by the Anthropic OAuth usage endpoint. */
+/** Rolling window IDs reported by the Anthropic OAuth usage endpoint. */
 export const FIVE_HOUR_ID = "five_hour";
+export const SEVEN_DAY_ID = "seven_day";
 
 export const LimitWindowSchema = z.object({
   /** Stable key, e.g. `five_hour`, `seven_day`, `seven_day_opus`. */

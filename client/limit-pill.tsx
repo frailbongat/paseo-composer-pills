@@ -2,7 +2,7 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import type { PluginButtonIconProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import {
-  findWindow,
+  findPillWindow,
   formatCountdown,
   readLimits,
   remainingPercent,
@@ -25,7 +25,7 @@ export function limitColor(window: LimitWindow, theme: PluginTheme): string {
  * headroom colour live without re-registering the pill.
  */
 export function LimitPillIcon({ theme, size, color }: PluginButtonIconProps) {
-  const window = findWindow(useLimits());
+  const window = findPillWindow(useLimits());
   return (
     <Icon name="Timer" size={size} color={window ? limitColor(window, theme) : color} />
   );
@@ -33,7 +33,7 @@ export function LimitPillIcon({ theme, size, color }: PluginButtonIconProps) {
 
 /** Pill text, computed outside React so the entrypoint can push it with `update`. */
 export function limitPillLabel(now: number): string | null {
-  const window = findWindow(readLimits());
+  const window = findPillWindow(readLimits());
   if (!window) return null;
   const countdown = formatCountdown(window.resetsAt, now);
   return `${Math.round(remainingPercent(window))}% left${countdown ? ` · ${countdown}` : ""}`;

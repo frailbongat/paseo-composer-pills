@@ -4,7 +4,7 @@ Status pills in the Paseo agent composer track bar.
 
 | Pill | Reads | Tap |
 | --- | --- | --- |
-| `⏱ 92% left · 3h 05m` | Claude headroom in the rolling 5h window, countdown ticks every second. Hidden for non-Claude models. | Opens the limits readout in place: every reported window (5h, weekly, per-model weekly). |
+| `⏱ 92% left · 2d 3h` | Claude headroom in the weekly window, countdown ticks every second. Falls back to the 5h window when no weekly one is reported. Hidden for non-Claude models. | Opens the limits readout in place: every reported window (5h, weekly, per-model weekly). |
 | `◔ 12k (6%)` | Context window usage from the agent's last turn. | Opens the context readout in place: input, cached, output tokens and cost. |
 | `◉ #112 · Route` | The GitHub issue or PR this agent's conversation cites. Absent on agents that cite none. | Opens the ticket in your own browser. No menu, no readout. |
 
