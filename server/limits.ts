@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { FIVE_HOUR_ID, type LimitWindow, type LimitsSnapshot } from "../shared/limits";
+import { type LimitWindow, type LimitsSnapshot } from "../shared/limits";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA = "oauth-2025-04-20";
@@ -131,13 +131,27 @@ function toMessage(error: unknown): string {
   return String(error);
 }
 
-/** A snapshot is only worth showing while its 5-hour window is still running. */
+/** A window's numbers stop being true once it resets. */
+function isLive(window: LimitWindow, now: number): boolean {
+  return window.resetsAt === null || Date.parse(window.resetsAt) > now;
+}
+
+/**
+ * A snapshot is worth showing while any window in it is still running. The
+ * 5-hour window lapses long before the weekly one, and the pill leads with the
+ * weekly one, so tying the whole snapshot to the 5-hour reset hid a good weekly
+ * number whenever a refetch failed.
+ */
 function isUsable(snapshot: LimitsSnapshot | null): snapshot is LimitsSnapshot {
   if (!snapshot) return false;
-  const fiveHour = snapshot.windows.find((window) => window.id === FIVE_HOUR_ID);
-  if (!fiveHour) return false;
-  if (fiveHour.resetsAt === null) return true;
-  return Date.parse(fiveHour.resetsAt) > Date.now();
+  const now = Date.now();
+  return snapshot.windows.some((window) => isLive(window, now));
+}
+
+/** Drops windows that have already reset, so a stale snapshot never shows old usage. */
+function liveWindows(snapshot: LimitsSnapshot): LimitWindow[] {
+  const now = Date.now();
+  return snapshot.windows.filter((window) => isLive(window, now));
 }
 
 let cached: LimitsSnapshot | null = null;
@@ -174,7 +188,7 @@ function persist(): void {
 }
 
 function currentSnapshot(): LimitsSnapshot {
-  if (isUsable(cached)) return { ...cached, error: lastError };
+  if (isUsable(cached)) return { ...cached, windows: liveWindows(cached), error: lastError };
   return {
     fetchedAt: new Date().toISOString(),
     account: null,
