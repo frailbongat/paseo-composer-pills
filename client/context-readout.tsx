@@ -11,6 +11,7 @@ import { Text, View } from "react-native";
 import { useAgentUsage, usageColor } from "./context-pill";
 import {
   formatExactTokens,
+  formatPercent,
   formatTokens,
   toContextUsage,
   usageRatio,
@@ -152,9 +153,13 @@ export function ContextReadout({
             fontVariant: ["tabular-nums"],
           }}
         >
-          {usage.maxTokens === null
-            ? formatTokens(usage.usedTokens)
-            : `${Math.round(ratio * 100)}%`}
+          {/* The statusline's order: tokens lead, the share trails muted. */}
+          {formatTokens(usage.usedTokens)}
+          {usage.maxTokens === null ? null : (
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: compact ? 18 : 22 }}>
+              {` (${formatPercent(usage)})`}
+            </Text>
+          )}
         </Text>
         <Text
           numberOfLines={1}

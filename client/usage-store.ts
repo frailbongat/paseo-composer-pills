@@ -97,12 +97,14 @@ export function usageRatio(usage: ContextUsage): number {
   return Math.min(1, Math.max(0, usage.usedTokens / usage.maxTokens));
 }
 
+/**
+ * Same rules as the Claude Code statusline (ccstatusline's `formatTokens`): one
+ * decimal, and the switch to `M` comes early enough that 999,960 reads `1.0M`
+ * rather than `1000.0k`.
+ */
 export function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) {
-    const millions = tokens / 1_000_000;
-    return `${millions >= 10 ? Math.round(millions) : millions.toFixed(1)}M`;
-  }
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  if (tokens >= 999_950) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
   return `${Math.round(tokens)}`;
 }
 
@@ -110,8 +112,14 @@ export function formatExactTokens(tokens: number): string {
   return Math.round(tokens).toLocaleString("en-US");
 }
 
+/** One decimal, like the statusline's `context-percentage`. */
+export function formatPercent(usage: ContextUsage): string {
+  return `${(usageRatio(usage) * 100).toFixed(1)}%`;
+}
+
+/** Statusline layout: tokens first, then the share of the window in parentheses. */
 export function formatUsage(usage: ContextUsage): string {
   const tokens = formatTokens(usage.usedTokens);
   if (usage.maxTokens === null) return tokens;
-  return `${tokens} (${Math.round(usageRatio(usage) * 100)}%)`;
+  return `${tokens} (${formatPercent(usage)})`;
 }
