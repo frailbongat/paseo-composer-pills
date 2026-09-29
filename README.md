@@ -57,10 +57,9 @@ paseo plugin ls   # expect: running
 
 ### Claude limits need a Claude token
 
-`server/limits.ts` runs on the daemon and reads the first working OAuth token from:
+`server/limits.ts` runs on the daemon and reads Claude Code's login from `~/.claude/.credentials.json`, then on macOS from the Keychain item `Claude Code-credentials`.
 
-1. Claude Code's login, from `~/.claude/.credentials.json`, then on macOS the Keychain item `Claude Code-credentials`
-2. `~/.pi/agent/auth.json`
+This is for personal use only. Anthropic's policy says Claude OAuth tokens are for Claude Code and Anthropic's own apps, so don't ship this plugin to other people.
 
 No token means no limit pill. Tokens never reach the client bundle.
 

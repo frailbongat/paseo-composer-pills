@@ -90,30 +90,13 @@ function readClaudeCodeKeychainCredential(): Promise<Credential | null> {
   });
 }
 
-function readPiCredentials(): Credential[] {
-  try {
-    const data = JSON.parse(
-      readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"),
-    ) as Record<string, { access?: string } | undefined>;
-    const token = data.anthropic?.access;
-    if (!token) return [];
-    return [{ token, source: "pi", account: null }];
-  } catch {
-    return [];
-  }
-}
-
 /**
- * Claude Code first: it keeps its token refreshed while you use it. The file
- * and the Keychain are tried separately, so a stale file left on a Mac cannot
- * hide the fresh Keychain token.
+ * The file and the Keychain are tried separately, so a stale file left on a
+ * Mac cannot hide the fresh Keychain token.
  */
 async function readCredentials(): Promise<Credential[]> {
   const claudeCode = [readClaudeCodeFileCredential(), await readClaudeCodeKeychainCredential()];
-  return [
-    ...claudeCode.filter((credential): credential is Credential => credential !== null),
-    ...readPiCredentials(),
-  ];
+  return claudeCode.filter((credential): credential is Credential => credential !== null);
 }
 
 function toWindows(payload: UsagePayload): LimitWindow[] {
