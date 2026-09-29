@@ -22,7 +22,7 @@ export const LimitsSnapshotSchema = z.object({
   fetchedAt: z.string(),
   /** Account the credential belongs to, when it can be inferred. */
   account: z.string().nullable(),
-  /** Where the OAuth token came from, e.g. `cliproxyapi`. */
+  /** Where the OAuth token came from, e.g. `claude-code`. */
   source: z.string().nullable(),
   windows: z.array(LimitWindowSchema),
   error: z.string().nullable(),

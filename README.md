@@ -59,9 +59,8 @@ paseo plugin ls   # expect: running
 
 `server/limits.ts` runs on the daemon and reads the first working OAuth token from:
 
-1. `$CLI_PROXY_API_AUTH_DIR` or `~/.cli-proxy-api/*.json` (entries with `type: "claude"`)
-2. `~/.claude/.credentials.json`
-3. `~/.pi/agent/auth.json`
+1. Claude Code's login, from `~/.claude/.credentials.json`, then on macOS the Keychain item `Claude Code-credentials`
+2. `~/.pi/agent/auth.json`
 
 No token means no limit pill. Tokens never reach the client bundle.
 

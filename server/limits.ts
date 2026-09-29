@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type LimitWindow, type LimitsSnapshot } from "../shared/limits";
@@ -7,6 +8,8 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA = "oauth-2025-04-20";
 const USER_AGENT = "paseo-composer-pills/1.0";
 const REQUEST_TIMEOUT_MS = 10_000;
+const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const KEYCHAIN_TIMEOUT_MS = 5_000;
 
 /**
  * The usage endpoint rate-limits aggressively, and the numbers move slowly, so
@@ -46,48 +49,45 @@ const WINDOW_LABELS: ReadonlyArray<readonly [keyof UsagePayload, string]> = [
   ["seven_day_sonnet", "sonnet week"],
 ];
 
-function readCliProxyCredentials(): Credential[] {
-  const authDir = process.env.CLI_PROXY_API_AUTH_DIR ?? join(homedir(), ".cli-proxy-api");
-  const credentials: Credential[] = [];
-
-  let entries: string[];
-  try {
-    entries = readdirSync(authDir);
-  } catch {
-    return credentials;
-  }
-
-  for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
-    try {
-      const data = JSON.parse(readFileSync(join(authDir, entry), "utf8")) as {
-        type?: string;
-        disabled?: boolean;
-        access_token?: string;
-        email?: string;
-      };
-      if (data.type !== "claude" || data.disabled === true || !data.access_token) continue;
-      const account = data.email ?? entry.replace(/^claude-/, "").replace(/\.json$/, "");
-      credentials.push({ token: data.access_token, source: "cliproxyapi", account });
-    } catch {
-      // Unreadable or malformed credential file.
-    }
-  }
-
-  return credentials;
+function toClaudeCodeCredential(raw: string): Credential | null {
+  const data = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
+  const token = data.claudeAiOauth?.accessToken;
+  return token ? { token, source: "claude-code", account: null } : null;
 }
 
-function readClaudeCodeCredentials(): Credential[] {
+/** Linux and older installs keep the Claude Code login in a file. */
+function readClaudeCodeFileCredential(): Credential | null {
   try {
-    const data = JSON.parse(
+    return toClaudeCodeCredential(
       readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8"),
-    ) as { claudeAiOauth?: { accessToken?: string } };
-    const token = data.claudeAiOauth?.accessToken;
-    if (!token) return [];
-    return [{ token, source: "claude-code", account: null }];
+    );
   } catch {
-    return [];
+    return null;
   }
+}
+
+/**
+ * macOS keeps the Claude Code login in the Keychain. Async so a slow or
+ * prompting `security` call never blocks the daemon.
+ */
+function readClaudeCodeKeychainCredential(): Promise<Credential | null> {
+  if (process.platform !== "darwin") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(
+      "security",
+      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+      { timeout: KEYCHAIN_TIMEOUT_MS },
+      (error, stdout) => {
+        if (error) return resolve(null);
+        try {
+          resolve(toClaudeCodeCredential(stdout));
+        } catch {
+          // Malformed Keychain entry.
+          resolve(null);
+        }
+      },
+    );
+  });
 }
 
 function readPiCredentials(): Credential[] {
@@ -103,9 +103,17 @@ function readPiCredentials(): Credential[] {
   }
 }
 
-/** Most trustworthy first: proxies keep their tokens refreshed. */
-function readCredentials(): Credential[] {
-  return [...readCliProxyCredentials(), ...readClaudeCodeCredentials(), ...readPiCredentials()];
+/**
+ * Claude Code first: it keeps its token refreshed while you use it. The file
+ * and the Keychain are tried separately, so a stale file left on a Mac cannot
+ * hide the fresh Keychain token.
+ */
+async function readCredentials(): Promise<Credential[]> {
+  const claudeCode = [readClaudeCodeFileCredential(), await readClaudeCodeKeychainCredential()];
+  return [
+    ...claudeCode.filter((credential): credential is Credential => credential !== null),
+    ...readPiCredentials(),
+  ];
 }
 
 function toWindows(payload: UsagePayload): LimitWindow[] {
@@ -200,7 +208,7 @@ function currentSnapshot(): LimitsSnapshot {
 
 async function fetchSnapshot(): Promise<LimitsSnapshot> {
   const fetchedAt = new Date().toISOString();
-  const credentials = readCredentials();
+  const credentials = await readCredentials();
 
   if (credentials.length === 0) {
     return {
