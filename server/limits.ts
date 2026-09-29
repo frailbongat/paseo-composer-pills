@@ -1,20 +1,28 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { type LimitWindow, type LimitsSnapshot } from "../shared/limits";
+import { accessSync, constants, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import {
+  FIVE_HOUR_ID,
+  type LimitWindow,
+  type LimitsSnapshot,
+  SEVEN_DAY_ID,
+} from "../shared/limits";
 
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const OAUTH_BETA = "oauth-2025-04-20";
-const USER_AGENT = "paseo-composer-pills/1.0";
-const REQUEST_TIMEOUT_MS = 10_000;
-const KEYCHAIN_SERVICE = "Claude Code-credentials";
-const KEYCHAIN_TIMEOUT_MS = 5_000;
+const USAGE_ARGS = [
+  "-p",
+  "/usage",
+  "--output-format",
+  "json",
+  // Without this every poll saves a session and clutters `claude --resume`.
+  "--no-session-persistence",
+];
+const COMMAND_TIMEOUT_MS = 20_000;
 
 /**
- * The usage endpoint rate-limits aggressively, and the numbers move slowly, so
- * hit the network rarely. Pills stay live because the reset countdown is
- * computed on the client from `resets_at`.
+ * Each poll starts a whole Claude Code process, and the numbers move slowly,
+ * so poll rarely. Pills stay live because the reset countdown is computed on
+ * the client from `resetsAt`.
  */
 const FRESH_TTL_MS = 15 * 60_000;
 const MIN_RETRY_MS = 5 * 60_000;
@@ -24,102 +32,227 @@ const MAX_RETRY_MS = 60 * 60_000;
 const CACHE_DIR = join(homedir(), ".cache", "paseo-composer-pills");
 const CACHE_FILE = join(CACHE_DIR, "usage.json");
 
-interface Credential {
-  readonly token: string;
-  readonly source: string;
-  readonly account: string | null;
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const RESET_GRACE_MS = 60_000;
+
+/**
+ * One line of the `/usage` text, e.g.
+ * `Current week (all models): 2% used · resets Oct 1 at 2:59pm (Asia/Manila)`.
+ */
+const USAGE_LINE =
+  /^Current (session|week \((.+?)\)):\s*(\d+(?:\.\d+)?)% used(?:.*?\bresets (.+?)(?:\s*\(([^()]+)\))?)?\s*$/;
+
+/** `Sep 29 at 4:39pm`, `Oct 1 at 3pm`, or a bare `4:39pm`. */
+const RESET_TEXT =
+  /^(?:([A-Za-z]{3})[a-z]*\.? (\d{1,2})(?:, (\d{4}))? at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i;
+
+interface UsageResult {
+  readonly type?: string;
+  readonly is_error?: boolean;
+  readonly result?: string;
 }
 
-interface WindowPayload {
-  readonly utilization?: number | null;
-  readonly resets_at?: string | null;
+interface WallClock {
+  readonly year: number;
+  readonly month: number;
+  readonly day: number;
+  readonly hour: number;
+  readonly minute: number;
 }
 
-interface UsagePayload {
-  readonly five_hour?: WindowPayload | null;
-  readonly seven_day?: WindowPayload | null;
-  readonly seven_day_opus?: WindowPayload | null;
-  readonly seven_day_sonnet?: WindowPayload | null;
-}
-
-const WINDOW_LABELS: ReadonlyArray<readonly [keyof UsagePayload, string]> = [
-  ["five_hour", "5h"],
-  ["seven_day", "week"],
-  ["seven_day_opus", "opus week"],
-  ["seven_day_sonnet", "sonnet week"],
-];
-
-function toClaudeCodeCredential(raw: string): Credential | null {
-  const data = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
-  const token = data.claudeAiOauth?.accessToken;
-  return token ? { token, source: "claude-code", account: null } : null;
-}
-
-/** Linux and older installs keep the Claude Code login in a file. */
-function readClaudeCodeFileCredential(): Credential | null {
+function isExecutable(path: string): boolean {
   try {
-    return toClaudeCodeCredential(
-      readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8"),
-    );
+    accessSync(path, constants.X_OK);
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
 /**
- * macOS keeps the Claude Code login in the Keychain. Async so a slow or
- * prompting `security` call never blocks the daemon.
+ * The daemon may start without the login shell's PATH, so fall back to the
+ * native installer's location when `claude` is not on it.
  */
-function readClaudeCodeKeychainCredential(): Promise<Credential | null> {
-  if (process.platform !== "darwin") return Promise.resolve(null);
-  return new Promise((resolve) => {
-    execFile(
-      "security",
-      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-      { timeout: KEYCHAIN_TIMEOUT_MS },
-      (error, stdout) => {
-        if (error) return resolve(null);
-        try {
-          resolve(toClaudeCodeCredential(stdout));
-        } catch {
-          // Malformed Keychain entry.
-          resolve(null);
-        }
-      },
-    );
-  });
+function findClaudeBinary(): string | null {
+  const onPath = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .map((dir) => join(dir, "claude"));
+  return [...onPath, join(homedir(), ".local", "bin", "claude")].find(isExecutable) ?? null;
+}
+
+/** The wall clock in `timeZone` at `instant`. Throws on an unknown zone. */
+function wallClockIn(instant: number, timeZone: string): WallClock {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+  }).formatToParts(instant);
+  const read = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  return {
+    year: read("year"),
+    month: read("month"),
+    day: read("day"),
+    hour: read("hour"),
+    minute: read("minute"),
+  };
 }
 
 /**
- * The file and the Keychain are tried separately, so a stale file left on a
- * Mac cannot hide the fresh Keychain token.
+ * The instant a wall-clock time in `timeZone` names. Measures the zone's
+ * offset at a first guess, then again at the corrected instant, so a DST
+ * change between the two still lands on the right hour.
  */
-async function readCredentials(): Promise<Credential[]> {
-  const claudeCode = [readClaudeCodeFileCredential(), await readClaudeCodeKeychainCredential()];
-  return claudeCode.filter((credential): credential is Credential => credential !== null);
+function zonedInstant(clock: WallClock, timeZone: string): number {
+  const asUtc = Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute);
+  const offsetAt = (instant: number) => {
+    const seen = wallClockIn(instant, timeZone);
+    return Date.UTC(seen.year, seen.month - 1, seen.day, seen.hour, seen.minute) - instant;
+  };
+  const guess = asUtc - offsetAt(asUtc);
+  return asUtc - offsetAt(guess);
 }
 
-function toWindows(payload: UsagePayload): LimitWindow[] {
+function closestTo(now: number, instants: number[]): number {
+  return instants.reduce((best, instant) =>
+    Math.abs(instant - now) < Math.abs(best - now) ? instant : best,
+  );
+}
+
+/**
+ * The CLI prints resets without a year, and sometimes without a date. A bare
+ * time means the next time the clock reads it, with a minute of grace so a
+ * reset that just passed stays today. A dated reset sits within a week of now,
+ * so the closest year is the one meant: `Jan 2` read on Dec 30 lands next
+ * year, and a reset that passed a minute ago does not jump a year ahead.
+ */
+function parseResetTime(
+  text: string,
+  timeZone: string,
+  now: number = Date.now(),
+): string | null {
+  const match = RESET_TEXT.exec(text.trim());
+  if (!match) return null;
+  const [, monthName, dayText, yearText, hourText, minuteText, meridiem] = match;
+
+  const hour12 = Number(hourText);
+  const minute = minuteText ? Number(minuteText) : 0;
+  if (hour12 < 1 || hour12 > 12 || minute > 59) return null;
+  const hour = (hour12 % 12) + (meridiem.toLowerCase() === "pm" ? 12 : 0);
+
+  try {
+    const today = wallClockIn(now, timeZone);
+    let instant: number;
+
+    if (monthName === undefined) {
+      // No date means the next time the clock reads this, today or tomorrow.
+      const days = [0, 1].map((offset) => {
+        const date = new Date(Date.UTC(today.year, today.month - 1, today.day + offset));
+        return {
+          year: date.getUTCFullYear(),
+          month: date.getUTCMonth() + 1,
+          day: date.getUTCDate(),
+          hour,
+          minute,
+        };
+      });
+      const [todayAt, tomorrowAt] = days.map((clock) => zonedInstant(clock, timeZone));
+      instant = todayAt >= now - RESET_GRACE_MS ? todayAt : tomorrowAt;
+    } else {
+      const month = MONTHS.indexOf(monthName.toLowerCase()) + 1;
+      const day = Number(dayText);
+      if (month === 0 || day < 1 || day > 31) return null;
+      const years = yearText ? [Number(yearText)] : [today.year - 1, today.year, today.year + 1];
+      instant = closestTo(
+        now,
+        years.map((year) => zonedInstant({ year, month, day, hour, minute }, timeZone)),
+      );
+    }
+
+    return Number.isFinite(instant) ? new Date(instant).toISOString() : null;
+  } catch {
+    // Unknown time zone.
+    return null;
+  }
+}
+
+function slug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+/**
+ * Keeps the ids the Anthropic usage API used (`five_hour`, `seven_day`,
+ * `seven_day_<model>`), which the client titles and the pill's weekly-first
+ * choice key off.
+ */
+function toWindow(scope: string, model: string | undefined): Pick<LimitWindow, "id" | "label"> {
+  if (scope === "session") return { id: FIVE_HOUR_ID, label: "5h" };
+  if (model === undefined || model.toLowerCase() === "all models") {
+    return { id: SEVEN_DAY_ID, label: "week" };
+  }
+  // The label keeps the model name as the CLI printed it, so the readout can
+  // title the card `Weekly (Fable)`.
+  return { id: `${SEVEN_DAY_ID}_${slug(model)}`, label: `${model} week` };
+}
+
+/** Reads the `Current ...: N% used · resets ...` lines out of the `/usage` text. */
+function toWindows(text: string, now: number = Date.now()): LimitWindow[] {
   const windows: LimitWindow[] = [];
 
-  for (const [key, label] of WINDOW_LABELS) {
-    const value = payload[key];
-    if (!value || typeof value.utilization !== "number") continue;
-    const resetsAt = typeof value.resets_at === "string" ? value.resets_at : null;
+  for (const line of text.split("\n")) {
+    const match = USAGE_LINE.exec(line.trim());
+    if (!match) continue;
+    const [, scope, model, percentText, resetText, zone] = match;
+    const timeZone = zone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     windows.push({
-      id: key,
-      label,
-      usedPercent: Math.min(100, Math.max(0, value.utilization)),
-      resetsAt: resetsAt !== null && !Number.isNaN(Date.parse(resetsAt)) ? resetsAt : null,
+      ...toWindow(scope, model),
+      usedPercent: Math.min(100, Math.max(0, Number(percentText))),
+      resetsAt: resetText === undefined ? null : parseResetTime(resetText, timeZone, now),
     });
   }
 
   return windows;
 }
 
-function toMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+/**
+ * Runs the unmodified Claude Code CLI, which reports the same numbers the
+ * usage API does, so this plugin never reads the Claude login token. Async so
+ * a slow CLI never blocks the daemon. Resolves with stdout even on a non-zero
+ * exit, because the CLI still prints its JSON result there.
+ */
+function runUsageCommand(binary: string): Promise<{ stdout: string; failure: string | null }> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      binary,
+      USAGE_ARGS,
+      { cwd: tmpdir(), timeout: COMMAND_TIMEOUT_MS },
+      (error, stdout, stderr) => {
+        if (!error) return resolve({ stdout, failure: null });
+        const code = (error as NodeJS.ErrnoException).code;
+        let failure: string;
+        if (code === "ENOENT") failure = `Claude Code CLI not found at ${binary}.`;
+        else if (error.killed) failure = "Claude Code `/usage` timed out.";
+        else {
+          const detail = String(stderr).trim().split("\n")[0];
+          failure = `Claude Code \`/usage\` exited with ${code ?? "an error"}${
+            detail ? `: ${detail}` : "."
+          }`;
+        }
+        resolve({ stdout, failure });
+      },
+    );
+    // `-p` reads a piped stdin as extra prompt text, so close it rather than
+    // leave the CLI waiting on it.
+    child.stdin?.end();
+  });
 }
 
 /** A window's numbers stop being true once it resets. */
@@ -191,64 +324,45 @@ function currentSnapshot(): LimitsSnapshot {
 
 async function fetchSnapshot(): Promise<LimitsSnapshot> {
   const fetchedAt = new Date().toISOString();
-  const credentials = await readCredentials();
+  const failed = (error: string): LimitsSnapshot => ({
+    fetchedAt,
+    account: null,
+    source: null,
+    windows: [],
+    error,
+  });
 
-  if (credentials.length === 0) {
-    return {
-      fetchedAt,
-      account: null,
-      source: null,
-      windows: [],
-      error: "No Claude OAuth credential found on this machine.",
-    };
+  const binary = findClaudeBinary();
+  if (binary === null) {
+    return failed("Claude Code CLI not found. Put `claude` on PATH or in ~/.local/bin.");
   }
 
-  let error = "Claude usage endpoint returned no data.";
-
-  for (const credential of credentials) {
-    // An explicit controller rather than `AbortSignal.timeout`, which the
-    // plugin's React Native lib types do not declare.
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    try {
-      const response = await fetch(USAGE_URL, {
-        headers: {
-          authorization: `Bearer ${credential.token}`,
-          "anthropic-beta": OAUTH_BETA,
-          "user-agent": USER_AGENT,
-        },
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        error =
-          response.status === 429
-            ? "Claude usage endpoint is rate limiting, backing off."
-            : `Claude usage request failed (${response.status}).`;
-        continue;
-      }
-
-      const windows = toWindows((await response.json()) as UsagePayload);
-      if (windows.length === 0) {
-        error = "Claude usage response had no rate-limit windows.";
-        continue;
-      }
-
-      return {
-        fetchedAt,
-        account: credential.account,
-        source: credential.source,
-        windows,
-        error: null,
-      };
-    } catch (caught) {
-      error = toMessage(caught);
-    } finally {
-      clearTimeout(timeout);
-    }
+  const { stdout, failure } = await runUsageCommand(binary);
+  let result: UsageResult;
+  try {
+    result = JSON.parse(stdout) as UsageResult;
+  } catch {
+    return failed(failure ?? "Claude Code `/usage` did not print JSON.");
   }
 
-  return { fetchedAt, account: null, source: null, windows: [], error };
+  const text = typeof result.result === "string" ? result.result.trim() : "";
+  if (result.type !== "result" || result.is_error) {
+    return failed(`Claude Code \`/usage\` failed: ${text.split("\n")[0] || "no details"}.`);
+  }
+  if (failure !== null) return failed(failure);
+
+  const windows = toWindows(text);
+  if (windows.length === 0) {
+    // An API-key login has no subscription limits to report.
+    const said = text.split("\n")[0];
+    return failed(
+      `Claude Code \`/usage\` shows no subscription limits. Sign Claude Code in with a Claude subscription.${
+        said ? ` It said: ${said}` : ""
+      }`,
+    );
+  }
+
+  return { fetchedAt, account: null, source: "claude-cli", windows, error: null };
 }
 
 function onSuccess(snapshot: LimitsSnapshot): LimitsSnapshot {

@@ -17,7 +17,7 @@ import {
   useNow,
   writeLimits,
 } from "./limits-store";
-import { type LimitWindow, readClaudeLimits } from "../shared/limits";
+import { type LimitWindow, readClaudeLimits, SEVEN_DAY_ID } from "../shared/limits";
 
 /** Anchored popovers size to their content, so give the readout a sane column. */
 const POPOVER_WIDTH = 320;
@@ -28,6 +28,21 @@ const TITLES: Record<string, string> = {
   seven_day_opus: "Weekly (Opus)",
   seven_day_sonnet: "Weekly (Sonnet)",
 };
+
+const MODEL_WEEK_SUFFIX = " week";
+
+/**
+ * Models without a fixed title, such as `seven_day_fable`, carry the model
+ * name as the CLI printed it in the label, e.g. `Fable week`.
+ */
+function windowTitle(window: LimitWindow): string {
+  const title = TITLES[window.id];
+  if (title) return title;
+  if (window.id.startsWith(`${SEVEN_DAY_ID}_`) && window.label.endsWith(MODEL_WEEK_SUFFIX)) {
+    return `Weekly (${window.label.slice(0, -MODEL_WEEK_SUFFIX.length)})`;
+  }
+  return window.label;
+}
 
 function WindowCard({
   window,
@@ -63,7 +78,7 @@ function WindowCard({
         }}
       >
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 14 }}>
-          {TITLES[window.id] ?? window.label}
+          {windowTitle(window)}
         </Text>
         <Text
           style={{
@@ -116,10 +131,10 @@ export function LimitReadout({ theme, compact }: { theme: PluginTheme; compact: 
 
   /**
    * Opening the readout asks the daemon, which answers from its own 15-minute
-   * snapshot and only hits Anthropic when that has expired. There is no manual
-   * refresh because a forced fetch cannot buy a newer number inside that
-   * window, and the endpoint answers `429` when pushed. The countdown below is
-   * computed locally every second, so it is exact however old the percentage is.
+   * snapshot and only runs `claude -p "/usage"` when that has expired. There is
+   * no manual refresh because each run starts a whole Claude Code process for
+   * numbers that move slowly. The countdown below is computed locally every
+   * second, so it is exact however old the percentage is.
    */
   useEffect(() => {
     let cancelled = false;

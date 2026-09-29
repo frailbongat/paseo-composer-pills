@@ -55,25 +55,24 @@ paseo plugin install "$PWD"
 paseo plugin ls   # expect: running
 ```
 
-### Claude limits need a Claude token
+### Claude limits need Claude Code signed in
 
-`server/limits.ts` runs on the daemon and reads Claude Code's login from `~/.claude/.credentials.json`, then on macOS from the Keychain item `Claude Code-credentials`.
+`server/limits.ts` runs on the daemon and gets the numbers by running `claude -p "/usage" --output-format json`. It looks for `claude` on the daemon's PATH, then in `~/.local/bin`.
 
-This is for personal use only. Anthropic's policy says Claude OAuth tokens are for Claude Code and Anthropic's own apps, so don't ship this plugin to other people.
+Claude Code must be signed in with a Claude subscription. An API-key login has no subscription limits, so the pill shows an error instead.
 
-No token means no limit pill. Tokens never reach the client bundle.
+The plugin never reads the Claude token. Only the unmodified Claude Code CLI touches it.
 
 ## Rate limits
 
-The Anthropic usage endpoint returns `429` under load and stays angry for minutes. The server layer is built around that:
+Each refresh starts a whole Claude Code process, and the numbers move slowly, so the server polls rarely:
 
-- One network call every 15 minutes at most, across all agents, pills, and windows. Nothing in the UI forces past it: opening the readout asks the daemon, which usually answers from that snapshot.
+- It runs `claude -p "/usage"` at most once every 15 minutes, across all agents, pills, and windows. Opening the readout asks the daemon, which usually answers from that snapshot.
+- On failure, it backs off from 5 to 60 minutes with jitter. Meanwhile it keeps serving the last good numbers with an `error` attached.
+- It caches the last good snapshot at `~/.cache/paseo-composer-pills/usage.json`, so a reload shows numbers without running the CLI.
+- It drops each window once its reset time passes, and drops the whole snapshot once every window has passed.
 
-- On failure, backoff from 5 to 60 minutes with jitter while still serving the last good numbers with an `error` attached.
-- Last good snapshot cached at `~/.cache/paseo-composer-pills/usage.json`, so a reload shows numbers instead of firing a fetch.
-- Snapshots are dropped once their 5h window passes.
-
-The percentage can lag by up to 15 minutes. The countdown never does: the client computes it from `resets_at`.
+The percentage can lag by up to 15 minutes. The countdown does not lag, because the client computes it from `resetsAt`.
 
 ## Layout
 
@@ -105,7 +104,7 @@ Since Paseo 0.8 a pill is a button descriptor rather than a component: Paseo dra
 | `client/context-pill.tsx` / `client/context-readout.tsx` / `client/context-panel.tsx` / `client/usage-store.ts` | client | Context pill, the readout shared by its popover and panel, per-agent usage store |
 | `client/settings-screen.tsx` / `client/settings-store.ts` / `shared/settings.ts` | both | Settings screen, client-side value cache, the persisted document and its defaults |
 | `shared/limits.ts` | shared | The Zod RPC contract for the limits read |
-| `server/limits.ts` | server | Reads the Claude OAuth token, calls the usage endpoint |
+| `server/limits.ts` | server | Runs `claude -p "/usage"` and parses the limit windows |
 
 ## Develop
 

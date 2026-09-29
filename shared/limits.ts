@@ -1,7 +1,7 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
-/** Rolling window IDs reported by the Anthropic OAuth usage endpoint. */
+/** Rolling window IDs, named after the Anthropic usage API's windows. */
 export const FIVE_HOUR_ID = "five_hour";
 export const SEVEN_DAY_ID = "seven_day";
 
@@ -20,9 +20,9 @@ export type LimitWindow = z.infer<typeof LimitWindowSchema>;
 
 export const LimitsSnapshotSchema = z.object({
   fetchedAt: z.string(),
-  /** Account the credential belongs to, when it can be inferred. */
+  /** Account the numbers belong to, when it can be inferred. */
   account: z.string().nullable(),
-  /** Where the OAuth token came from, e.g. `claude-code`. */
+  /** Where the numbers came from, e.g. `claude-cli`. */
   source: z.string().nullable(),
   windows: z.array(LimitWindowSchema),
   error: z.string().nullable(),
